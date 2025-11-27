@@ -81,17 +81,36 @@
         // 1. CONFIGURATION AND INITIALIZATION
         // ----------------------------------------------------------------------
         
-        // ** 使用者提供的 Firebase 配置 **
-        const firebaseConfig = {
-            apiKey: "AIzaSyCMiLg3coEoLeVtLmfEK_zlAHsHZ-yZfP0",
-            authDomain: "project-407d1.firebaseapp.com",
-            projectId: "project-407d1",
-            storageBucket: "project-407d1.firebasestorage.app",
-            messagingSenderId: "524548363140",
-            appId: "1:524548363140:web:7b7dedc2a70faf5790c3d1",
-            measurementId: "G-QXYBX3MFXE"
+        // 設置全局變數的備用值和類型檢查
+        const getGlobalVar = (name) => {
+            return typeof window[name] !== 'undefined' ? window[name] : undefined;
         };
+
+        const initialAuthToken = getGlobalVar('__initial_auth_token');
+        const __app_id = getGlobalVar('__app_id');
+        const __firebase_config = getGlobalVar('__firebase_config');
         
+        // 解析 Firebase 配置 (如果可用)
+        let firebaseConfig = null;
+        if (__firebase_config) {
+            try {
+                firebaseConfig = JSON.parse(__firebase_config);
+            } catch (e) {
+                console.error("無法解析 __firebase_config:", e);
+                // 設置一個安全的備用配置以嘗試初始化
+                firebaseConfig = {}; 
+            }
+        } else {
+             // 提供一個假的配置，因為 Canvas 應該會注入正確的配置
+            firebaseConfig = {
+                apiKey: "FAKE_API_KEY",
+                authDomain: "FAKE_AUTH_DOMAIN",
+                projectId: "FAKE_PROJECT_ID",
+                appId: "FAKE_APP_ID"
+            };
+        }
+
+
         // 全局狀態變數
         let state = {
             db: null,
@@ -103,7 +122,7 @@
             assignees: [],
             currentTime: '',
             targetVersion: '1.0.0', 
-            currentVersion: '1.0.1', 
+            currentVersion: '1.0.2', // 提高了版本號以顯示更新
             isDbConnected: true,
             isAssigneesSeeded: false,
             notificationModal: { isOpen: false, title: '', message: '', isEmail: false, emailContent: null },
@@ -111,8 +130,9 @@
         };
 
         // 常數
-        const ADMIN_IDS = ['15152491164772220861']; 
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        // 為了測試，設置一個範例管理員 UID
+        const ADMIN_IDS = ['15152491164772220861', 'TestAdmin123']; 
+        const appId = __app_id || 'default-app-id';
         const PROJECTS_PATH = `artifacts/${appId}/public/data/projects`;
         const ASSIGNEES_PATH = `artifacts/${appId}/public/data/assignees`;
         const CONFIG_PATH = `artifacts/${appId}/public/data/config`;
@@ -180,71 +200,78 @@ ${name} 您好，
         
         async function initFirebase() {
             try {
+                // 1. 初始化 Firebase App
                 const app = initializeApp(firebaseConfig);
                 const auth = getAuth(app);
                 const db = getFirestore(app);
                 
                 setState({ db, auth });
 
-                // ** 關鍵修正區塊: 確保同步獲得一個帶有 UID 的使用者 **
                 let user = null;
-                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
                 
-                try {
-                    if (initialAuthToken) {
+                // 2. 嘗試使用 Custom Token 登入 (Canvas 推薦方式)
+                if (initialAuthToken) {
+                    try {
                         const userCredential = await signInWithCustomToken(auth, initialAuthToken);
                         user = userCredential.user;
                         console.log("已使用 Custom Token 登入。UID:", user.uid);
-                    } else {
-                        // 如果沒有 Custom Token，強制使用匿名登入以獲得一個 UID
+                    } catch (e) {
+                        console.error("Custom Token 登入失敗，嘗試匿名登入。錯誤:", e);
+                        user = null; // 重置 user
+                    }
+                }
+                
+                // 3. 如果 Custom Token 登入失敗或不存在 Token，強制匿名登入以確保獲得一個 UID
+                if (!user) {
+                    try {
                         const userCredential = await signInAnonymously(auth);
                         user = userCredential.user;
                         console.log("已使用匿名方式登入 (備用)。UID:", user.uid);
+                    } catch (e) {
+                         console.error("匿名登入失敗。 Firestore 將無法存取公共資料。錯誤:", e);
+                         user = null;
                     }
-                } catch (e) {
-                    console.error("身份驗證失敗，無法獲取使用者，將使用當前 auth.currentUser:", e);
-                    // 登入失敗時，嘗試使用當前的 auth.currentUser 作為備用
-                    user = auth.currentUser; 
                 }
                 
-                // 檢查 user 是否成功獲取
-                const isAdminGlobal = user ? ADMIN_IDS.includes(user.uid) : false;
+                // 4. 設定身份驗證狀態
+                const currentUserId = user ? user.uid : null;
+                const isAdminGlobal = currentUserId ? ADMIN_IDS.includes(currentUserId) : false;
+
                 setState({ 
-                    userId: user ? user.uid : null, 
+                    userId: currentUserId, 
                     isAuthReady: true, // <-- 確保在這裡設定為 true
                     isAdminGlobal: isAdminGlobal,
                 });
-                console.log("使用者 ID:", user ? user.uid : 'N/A', "管理員:", isAdminGlobal);
+                console.log("使用者 ID:", currentUserId || 'N/A', "管理員:", isAdminGlobal);
 
-                // 啟動資料監聽器 (確保只啟動一次，且只有在有 UID 時才啟動)
-                if (user && user.uid && !isListenersSetup) {
+                // 5. 啟動資料監聽器 (確保只啟動一次，且只有在有 UID 時才啟動)
+                if (currentUserId && !isListenersSetup) {
                     setupDataListeners();
                     isListenersSetup = true;
                 }
-
-                // 設置持續的身份驗證狀態變更監聽器
+                
+                // 6. 設置持續的身份驗證狀態變更監聽器
                 onAuthStateChanged(auth, (user) => {
-                    const currentUserId = user ? user.uid : null;
-                    if (currentUserId !== state.userId) {
+                    const changedUserId = user ? user.uid : null;
+                    if (changedUserId !== state.userId) {
                          setState({ 
-                            userId: currentUserId, 
-                            isAdminGlobal: currentUserId ? ADMIN_IDS.includes(currentUserId) : false 
+                            userId: changedUserId, 
+                            isAdminGlobal: changedUserId ? ADMIN_IDS.includes(changedUserId) : false 
                          });
-                         // 重新啟動監聽器如果 user 發生變化 (例如登出/入)
-                         if (user && user.uid && !isListenersSetup) {
+                         if (changedUserId && !isListenersSetup) {
                             setupDataListeners();
                             isListenersSetup = true;
-                         } else if (!user) {
-                            // 登出時可以清理資料
+                         } else if (!changedUserId) {
                             setState({ projects: [], assignees: [], isListenersSetup: false });
                          }
                     }
                 });
 
-                // 開始時鐘更新
+                // 7. 開始時鐘更新
                 setInterval(() => {
                     setState({ currentTime: getFormattedDate() });
                 }, 1000);
+
             } catch (error) {
                 console.error("Firebase 初始化失敗 (可能是配置錯誤): ", error);
                 // 確保無論如何都會結束初始化等待
@@ -271,7 +298,8 @@ ${name} 您好，
                 setState({ projects: projectsData, isDbConnected: true });
             }, (error) => {
                 console.error("獲取專案資料錯誤: ", error);
-                setState({ isDbConnected: false });
+                // 這裡通常是安全規則錯誤，但在程式層面我們假設是斷線
+                setState({ isDbConnected: false }); 
             });
 
             // 監聽處理人 (Assignees)
@@ -299,6 +327,10 @@ ${name} 您好，
                     setState({ targetVersion: data.targetVersion || state.currentVersion, isDbConnected: true });
                 } else {
                     setState({ targetVersion: state.currentVersion, isDbConnected: true });
+                    // 如果配置不存在，嘗試設定一個預設版本
+                    if (state.isAdminGlobal) {
+                         setDoc(configDocRef, { targetVersion: state.currentVersion, createdAt: new Date() }, { merge: true }).catch(e => console.error("Error setting initial config:", e));
+                    }
                 }
             }, (error) => {
                 console.error("獲取配置資料錯誤: ", error);
@@ -318,8 +350,9 @@ ${name} 您好，
             if (!state.db) return;
             setState({ isAssigneesSeeded: true }); 
             
+            // 確保第一個種子處理人的 linkedUserId 是管理員的 UID (或測試用的 UID)
             const usersToSeed = [
-                { name: 'Jacky Test (管理員)', email: 'jacky@vercelfire.com', linkedUserId: ADMIN_IDS[0] }, 
+                { name: 'Jacky Test (管理員)', email: 'jacky@vercelfire.com', linkedUserId: state.userId }, 
                 { name: 'Phone Worker (一般用戶)', email: 'phone@vercelfire.com', linkedUserId: '' }, 
             ];
 
@@ -332,7 +365,7 @@ ${name} 您好，
                     batch.set(newDocRef, {
                         ...user,
                         createdAt: new Date(),
-                        createdBy: 'system-seed'
+                        createdBy: state.userId || 'system-seed-no-auth'
                     });
                 });
                 
@@ -737,7 +770,7 @@ ${name} 您好，
                         <form id="version-form" class="flex space-x-3 items-center flex-wrap gap-y-2">
                             <label for="targetVersion" class="text-sm font-medium text-gray-700 whitespace-nowrap">設定新目標版本:</label>
                             <input type="text" id="targetVersion" name="targetVersion" value="${state.targetVersion}"
-                                placeholder="例如: 1.0.1" required
+                                placeholder="例如: 1.0.3" required
                                 class="w-full sm:w-40 rounded-md border-gray-300 shadow-sm focus:border-pink-500 focus:ring-pink-500 p-2 border text-sm"/>
                             <button type="submit" id="update-version-btn"
                                 class="w-full sm:w-auto px-4 py-2 bg-pink-600 text-white font-semibold rounded-lg shadow-md hover:bg-pink-700 focus:outline-none focus:ring-2 focus:ring-pink-500 focus:ring-offset-2 transition transform hover:scale-105 disabled:opacity-50 text-sm">
@@ -846,14 +879,14 @@ ${name} 您好，
         }
         
         function renderProjectList() {
-            // 由於 now userId 應該是可靠的，我們可以針對兩種常見失敗情況顯示不同的錯誤
+            // 如果 isAuthReady 為 true 且 userId 仍然是 null，表示登入徹底失敗
             if (state.isAuthReady && !state.userId) {
                 return `
-                    <h2 class="text-2xl font-bold text-gray-800 mb-4">所有專案 (資料無法載入)</h2>
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4">所有專案 (無法存取)</h2>
                     <div class="bg-white rounded-xl shadow-lg p-6 text-center text-red-500 border border-red-200">
                         <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 inline-block mr-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                        <strong>致命錯誤：</strong> 身份驗證已完成，但使用者 ID 為「${state.userId || 'N/A'}」。這表示登入嘗試失敗，且 **Firestore 安全規則** 可能拒絕了對公共資料的匿名或未驗證存取。
-                        <p class="mt-2 text-sm text-gray-600">請檢查瀏覽器控制台中的 Firebase 錯誤日誌。</p>
+                        <strong>致命錯誤：</strong> 身份驗證失敗，無法獲取有效的使用者 ID。請確保 **Canvas 環境** 正確提供了 `__initial_auth_token`，或您的 **Firestore 安全規則** 允許匿名存取。
+                        <p class="mt-2 text-sm text-gray-600">目前無法讀取/寫入公共資料。</p>
                     </div>
                 `;
             }
@@ -875,6 +908,7 @@ ${name} 您好，
                 const priorityClass = `priority-${proj.priority}`;
                 const statusClass = `status-${proj.status.replace(/\s/g, '')}`;
                 
+                // 檢查權限：專案創建者、指派人 (透過綁定的 UID) 或全局管理員
                 const isProjectCreator = state.userId === proj.createdBy;
                 const isAssignee = proj.linkedUserId ? state.userId === proj.linkedUserId : false;
                 const canReassign = state.isAdminGlobal || isProjectCreator || isAssignee;
@@ -953,7 +987,7 @@ ${name} 您好，
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        <strong>正在連接 Firebase:</strong> 系統正在等待使用者身份驗證完成。
+                        <strong>正在連接 Firebase:</strong> 系統正在等待使用者身份驗證完成...
                     </div>
                 `;
                 return;
