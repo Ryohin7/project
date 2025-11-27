@@ -104,8 +104,8 @@
         const ASSIGNEES_PATH = `artifacts/${appId}/public/data/assignees`;
         const CONFIG_PATH = `artifacts/${appId}/public/data/config`;
         
-        // 使用者提供的 Firebase 設定
-        const userProvidedConfig = {
+        // 提供的 Firebase 設定作為 fallback (若 Canvas 環境未提供則使用此配置)
+        const defaultFirebaseConfig = {
             apiKey: "AIzaSyCMiLg3coEoLeVtLmfEK_zlAHsHZ-yZfP0",
             authDomain: "project-407d1.firebaseapp.com",
             projectId: "project-407d1",
@@ -115,9 +115,10 @@
             measurementId: "G-QXYBX3MFXE"
         };
         
+        // 優先使用 Canvas 環境提供的設定 (__firebase_config)，否則使用預設配置
         const firebaseConfig = typeof __firebase_config !== 'undefined' 
             ? JSON.parse(__firebase_config) 
-            : userProvidedConfig;
+            : defaultFirebaseConfig;
 
         let app;
         let db;
