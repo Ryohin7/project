@@ -178,20 +178,6 @@ ${name} 您好，
         // 3. FIREBASE AUTH AND DATA LISTENERS
         // ----------------------------------------------------------------------
         
-        /**
-         * 強制等待首次身份驗證狀態回覆
-         * @param {import("https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js").Auth} auth 
-         */
-        function awaitInitialAuth(auth) {
-            return new Promise((resolve) => {
-                const unsubscribe = onAuthStateChanged(auth, (user) => {
-                    // 第一次狀態變更後立即取消監聽，並解析 Promise
-                    unsubscribe(); 
-                    resolve(user);
-                });
-            });
-        }
-
         async function initFirebase() {
             try {
                 const app = initializeApp(firebaseConfig);
@@ -200,25 +186,28 @@ ${name} 您好，
                 
                 setState({ db, auth });
 
-                // 執行身份驗證：優先使用 Custom Token，否則使用匿名登入
+                // ** 關鍵修正區塊: 確保同步獲得一個帶有 UID 的使用者 **
+                let user = null;
                 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
                 
                 try {
                     if (initialAuthToken) {
-                        await signInWithCustomToken(auth, initialAuthToken);
-                        console.log("已使用 Custom Token 登入。");
+                        const userCredential = await signInWithCustomToken(auth, initialAuthToken);
+                        user = userCredential.user;
+                        console.log("已使用 Custom Token 登入。UID:", user.uid);
                     } else {
-                        await signInAnonymously(auth);
-                        console.log("已使用匿名方式登入 (備用)。");
+                        // 如果沒有 Custom Token，強制使用匿名登入以獲得一個 UID
+                        const userCredential = await signInAnonymously(auth);
+                        user = userCredential.user;
+                        console.log("已使用匿名方式登入 (備用)。UID:", user.uid);
                     }
-                } catch(e) {
-                    console.error("身份驗證或登入失敗，將嘗試使用 onAuthStateChanged 獲取狀態:", e);
-                    // 登入失敗不應該阻止我們獲取當前狀態
+                } catch (e) {
+                    console.error("身份驗證失敗，無法獲取使用者，將使用當前 auth.currentUser:", e);
+                    // 登入失敗時，嘗試使用當前的 auth.currentUser 作為備用
+                    user = auth.currentUser; 
                 }
-
-                // ** 關鍵修正: 等待首次身份驗證狀態回覆 **
-                const user = await awaitInitialAuth(auth);
                 
+                // 檢查 user 是否成功獲取
                 const isAdminGlobal = user ? ADMIN_IDS.includes(user.uid) : false;
                 setState({ 
                     userId: user ? user.uid : null, 
@@ -227,14 +216,13 @@ ${name} 您好，
                 });
                 console.log("使用者 ID:", user ? user.uid : 'N/A', "管理員:", isAdminGlobal);
 
-                // 啟動資料監聽器 (確保只啟動一次)
-                if (user && !isListenersSetup) {
+                // 啟動資料監聽器 (確保只啟動一次，且只有在有 UID 時才啟動)
+                if (user && user.uid && !isListenersSetup) {
                     setupDataListeners();
                     isListenersSetup = true;
                 }
 
-                // 設置持續的身份驗證狀態變更監聽器（非啟動時序關鍵）
-                // 由於我們在 awaitInitialAuth 中已經獲取了初始狀態，這裡只需確保後續變更被處理
+                // 設置持續的身份驗證狀態變更監聽器
                 onAuthStateChanged(auth, (user) => {
                     const currentUserId = user ? user.uid : null;
                     if (currentUserId !== state.userId) {
@@ -243,13 +231,12 @@ ${name} 您好，
                             isAdminGlobal: currentUserId ? ADMIN_IDS.includes(currentUserId) : false 
                          });
                          // 重新啟動監聽器如果 user 發生變化 (例如登出/入)
-                         if (user && !isListenersSetup) {
+                         if (user && user.uid && !isListenersSetup) {
                             setupDataListeners();
                             isListenersSetup = true;
                          } else if (!user) {
                             // 登出時可以清理資料
-                            setState({ projects: [], assignees: [] });
-                            isListenersSetup = false;
+                            setState({ projects: [], assignees: [], isListenersSetup: false });
                          }
                     }
                 });
@@ -269,7 +256,6 @@ ${name} 您好，
         function setupDataListeners() {
             if (!state.db || !state.userId) {
                 console.error("無法設置資料監聽器：DB 或 User ID 缺失。");
-                // 如果是未驗證的匿名用戶，且安全規則要求 auth != null，這裡可能會因為沒有 uid 而失敗
                 return;
             }
             
@@ -860,18 +846,19 @@ ${name} 您好，
         }
         
         function renderProjectList() {
-            if (!state.userId && state.isAuthReady) {
-                // 如果身份驗證已完成 (isAuthReady=true)，但沒有 user ID，表示使用者是未登入狀態，且無法讀取公共資料。
+            // 由於 now userId 應該是可靠的，我們可以針對兩種常見失敗情況顯示不同的錯誤
+            if (state.isAuthReady && !state.userId) {
                 return `
                     <h2 class="text-2xl font-bold text-gray-800 mb-4">所有專案 (資料無法載入)</h2>
                     <div class="bg-white rounded-xl shadow-lg p-6 text-center text-red-500 border border-red-200">
                         <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 inline-block mr-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                        <strong>資料讀取錯誤：</strong> 身份驗證已完成，但無法讀取資料。這很可能是由於 **Firestore 安全規則** 拒絕了當前的使用者 ID (${state.userId || 'N/A'}) 訪問公共資料。
+                        <strong>致命錯誤：</strong> 身份驗證已完成，但使用者 ID 為「${state.userId || 'N/A'}」。這表示登入嘗試失敗，且 **Firestore 安全規則** 可能拒絕了對公共資料的匿名或未驗證存取。
+                        <p class="mt-2 text-sm text-gray-600">請檢查瀏覽器控制台中的 Firebase 錯誤日誌。</p>
                     </div>
                 `;
             }
-            
-            if (state.projects.length === 0) {
+
+            if (state.projects.length === 0 && state.isAuthReady) {
                 return `
                     <h2 class="text-2xl font-bold text-gray-800 mb-4">所有專案 (0)</h2>
                     <div class="bg-white rounded-xl shadow-lg p-6 text-center text-gray-500 border border-gray-200">
@@ -880,6 +867,10 @@ ${name} 您好，
                 `;
             }
             
+            if (state.projects.length === 0 && !state.isAuthReady) {
+                 return `<!-- 仍在等待驗證，將由 renderApp 處理 -->`;
+            }
+
             const tableRows = state.projects.map(proj => {
                 const priorityClass = `priority-${proj.priority}`;
                 const statusClass = `status-${proj.status.replace(/\s/g, '')}`;
@@ -962,7 +953,7 @@ ${name} 您好，
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        <strong>正在連接 Firebase:</strong> 正在等待使用者身份驗證流程完成...
+                        <strong>正在連接 Firebase:</strong> 系統正在等待使用者身份驗證完成。
                     </div>
                 `;
                 return;
