@@ -1,1102 +1,483 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>專案管理儀表板 - 單一HTML版</title>
-    <!-- 載入 Tailwind CSS -->
+    <title>專案儀表板</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- 載入 Noto Sans TC 字體 -->
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    <script src="https://unpkg.com/react/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide-react@latest"></script> 
     
     <style>
-        /* 自定義樣式和字體設定 */
-        body {
-            font-family: 'Noto Sans TC', 'Inter', sans-serif;
-            background-color: #f8fafc; /* Light gray background */
-            color: #1e293b;
-        }
-
-        /* 徽章樣式 */
-        .badge {
-            padding: 4px 10px;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            cursor: pointer;
-        }
-        .priority-High { background-color: #fee2e2; color: #b91c1c; } /* Red */
-        .priority-Medium { background-color: #fff3c7; color: #a16207; } /* Amber */
-        .priority-Low { background-color: #dcfce7; color: #16a34a; } /* Green */
-        .status-Pending { background-color: #e2e8f0; color: #475569; } /* Slate */
-        .status-InProgress { background-color: #dbeafe; color: #2563eb; } /* Blue */
-        .status-Blocked { background-color: #fecaca; color: #dc2626; } /* Red */
-        .status-Completed { background-color: #d1fae5; color: #059669; } /* Emerald */
-
-        /* 響應式表格：僅適用於行動裝置 */
-        @media (max-width: 768px) {
-            table, thead, tbody, th, td, tr { display: block; }
-            thead tr { position: absolute; top: -9999px; left: -9999px; }
-            tr { border: 1px solid #e5e7eb; margin-bottom: 0.5rem; border-radius: 0.75rem; overflow: hidden; }
-            td {
-                border: none; border-bottom: 1px solid #f3f4f6; position: relative;
-                padding-left: 50%; text-align: right;
-            }
-            td:last-child { border-bottom: none; }
-            td:before {
-                position: absolute; top: 0; left: 6px; width: 45%; padding-right: 10px;
-                white-space: nowrap; content: attr(data-label); font-weight: 600;
-                text-align: left; color: #64748b; font-size: 0.875rem; line-height: 1.5rem;
-            }
+        /* 確保全螢幕高度和背景 */
+        body, #root {
+            height: 100vh;
+            margin: 0;
+            background-color: #f7f8fa; /* 淺灰背景 */
         }
     </style>
 </head>
-<body class="p-4 md:p-8">
-    <div id="app" class="container mx-auto max-w-7xl">
-        <!-- 應用程式內容將插入此處 -->
-        <div class="text-center p-12 text-lg text-indigo-600">
-            啟動中... 正在連接 Firebase 服務並驗證身份...
-        </div>
-    </div>
+<body>
+    <div id="root"></div>
 
-    <!-- 模態框容器 -->
-    <div id="modal-container"></div>
-    <div id="assignee-modal-container"></div>
-    
-    <script type="module">
-        // 載入 Firebase SDK 模組
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { 
-            getFirestore, collection, query, onSnapshot, 
-            addDoc, setDoc, doc, updateDoc, deleteDoc,
-            writeBatch, setLogLevel 
-        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // setLogLevel('debug'); // 開啟 Firebase 偵錯日誌
-
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useMemo } = React;
+        const { RefreshCw, Users, Send, CheckCircle, XCircle } = lucide; 
+        
         // ----------------------------------------------------------------------
-        // 1. CONFIGURATION AND INITIALIZATION
+        // 1. CONSTANTS
         // ----------------------------------------------------------------------
         
-        // 設置全局變數的備用值和類型檢查
-        const getGlobalVar = (name) => {
-            return typeof window[name] !== 'undefined' ? window[name] : undefined;
-        };
+        const PROJECTS_PATH = 'projects';
+        const ASSIGNEES_PATH = 'assignees';
+        const CONFIG_PATH = 'config';
         
-        // *** 修正: 重新命名本地變數以避免與注入的全局變數發生衝突 ***
-        const initialAuthToken = getGlobalVar('__initial_auth_token');
-        const injectedAppId = getGlobalVar('__app_id');
-        const injectedFirebaseConfigStr = getGlobalVar('__firebase_config');
+        // ----------------------------------------------------------------------
+        // 2. FIREBASE INITIALIZATION AND SETUP FOR CANVAS/VERCEL HYBRID
+        // ----------------------------------------------------------------------
         
-        // 解析 Firebase 配置 (如果可用)
-        let firebaseConfig = null;
-        if (injectedFirebaseConfigStr) {
-            try {
-                firebaseConfig = JSON.parse(injectedFirebaseConfigStr);
-            } catch (e) {
-                console.error("無法解析 __firebase_config:", e);
-                // 設置一個安全的備用配置以嘗試初始化
-                firebaseConfig = {}; 
-            }
-        } else {
-             // 提供一個假的配置，因為 Canvas 應該會注入正確的配置
-            firebaseConfig = {
-                apiKey: "FAKE_API_KEY",
-                authDomain: "FAKE_AUTH_DOMAIN",
-                projectId: "FAKE_PROJECT_ID",
-                appId: "FAKE_APP_ID"
+        // ** 修正: 檢查 Canvas 全局變數 '__firebase_config'，如果不存在，則使用 Vercel 環境變數 **
+        const firebaseConfig = typeof __firebase_config !== 'undefined' 
+            ? JSON.parse(__firebase_config) 
+            : {
+                // Vercel Fallback Configuration - 讀取 Vercel/本地環境變數
+                // 注意：您必須在 Vercel 或本地 .env 檔案中設定 REACT_APP_FIREBASE_... 變數
+                apiKey: process.env.REACT_APP_FIREBASE_API_KEY, 
+                authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
+                projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
+                storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
+                messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
+                appId: process.env.REACT_APP_FIREBASE_APP_ID,
+                measurementId: process.env.REACT_APP_FIREBASE_MEASUREMENT_ID,
             };
-        }
 
-
-        // 全局狀態變數
-        let state = {
-            db: null,
-            auth: null,
-            userId: null,
-            isAdminGlobal: false,
-            isAuthReady: false, // <-- 關鍵: 必須為 true 才能渲染主內容
-            projects: [],
-            assignees: [],
-            currentTime: '',
-            targetVersion: '1.0.0', 
-            currentVersion: '1.0.2', // 提高了版本號以顯示更新
-            isDbConnected: true,
-            isAssigneesSeeded: false,
-            notificationModal: { isOpen: false, title: '', message: '', isEmail: false, emailContent: null },
-            assigneeModal: { isOpen: false, projectId: null, projectName: '', currentAssigneeId: null },
-        };
-
-        // 常數
-        // 為了測試，設置一個範例管理員 UID
-        const ADMIN_IDS = ['15152491164772220861', 'TestAdmin123']; 
-        const appId = injectedAppId || 'default-app-id'; // *** 修正: 使用新的本地變數 ***
-        const PROJECTS_PATH = `artifacts/${appId}/public/data/projects`;
-        const ASSIGNEES_PATH = `artifacts/${appId}/public/data/assignees`;
-        const CONFIG_PATH = `artifacts/${appId}/public/data/config`;
-        const CONFIG_DOC_ID = 'app_config';
+        let app;
+        let db;
+        let authInstance;
         
-        let isListenersSetup = false; // 確保監聽器只設置一次
-
-        // ----------------------------------------------------------------------
-        // 2. HELPER FUNCTIONS
-        // ----------------------------------------------------------------------
-
-        function getFormattedDate(date = new Date()) {
-            return date.toLocaleString('zh-TW', {
-                year: 'numeric', month: '2-digit', day: '2-digit',
-                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-            });
-        }
-
-        // 設置全局狀態並觸發重新渲染
-        function setState(newState) {
-            state = { ...state, ...newState };
-            renderApp();
-        }
-
-        // 顯示通知模態框
-        function showNotification(title, message, isEmail = false, emailContent = null) {
-            setState({ 
-                notificationModal: { isOpen: true, title, message, isEmail, emailContent } 
-            });
-        }
-        
-        // 模擬郵件通知
-        function openEmailModal(name, email, projectName, isReassign = false) {
-            const actionText = isReassign ? '重新指派' : '新增指派';
-            const subject = isReassign 
-                ? `專案重新指派通知: ${projectName}`
-                : `新專案指派通知: ${projectName}`;
-            
-            const body = `
-${name} 您好，
-
-此郵件通知您，您收到了一個新的專案指派/重新指派。
-
-專案名稱: ${projectName}
-優先程度: (請至儀表板確認)
-截止日期: (請至儀表板確認)
-
-請登入專案管理儀表板查看詳情並開始處理。
-
-謝謝。
-專案管理系統自動通知
-            `;
-            
-            showNotification(
-                `郵件通知模擬 (已${actionText})`, 
-                `系統已模擬發送通知郵件到：${email}`,
-                true, 
-                { subject, to: email, body }
-            );
-        }
-
-        // ----------------------------------------------------------------------
-        // 3. FIREBASE AUTH AND DATA LISTENERS
-        // ----------------------------------------------------------------------
-        
-        async function initFirebase() {
+        const initFirebase = async () => {
             try {
-                // 1. 初始化 Firebase App
-                const app = initializeApp(firebaseConfig);
-                const auth = getAuth(app);
-                const db = getFirestore(app);
-                
-                setState({ db, auth });
-
-                let user = null;
-                
-                // 2. 嘗試使用 Custom Token 登入 (Canvas 推薦方式)
-                if (initialAuthToken) {
-                    try {
-                        const userCredential = await signInWithCustomToken(auth, initialAuthToken);
-                        user = userCredential.user;
-                        console.log("已使用 Custom Token 登入。UID:", user.uid);
-                    } catch (e) {
-                        console.error("Custom Token 登入失敗，嘗試匿名登入。錯誤:", e);
-                        user = null; // 重置 user
-                    }
+                // 檢查是否已經初始化
+                if (app) {
+                    return { db, authInstance };
                 }
                 
-                // 3. 如果 Custom Token 登入失敗或不存在 Token，強制匿名登入以確保獲得一個 UID
-                if (!user) {
-                    try {
-                        const userCredential = await signInAnonymously(auth);
-                        user = userCredential.user;
-                        console.log("已使用匿名方式登入 (備用)。UID:", user.uid);
-                    } catch (e) {
-                         console.error("匿名登入失敗。 Firestore 將無法存取公共資料。錯誤:", e);
-                         user = null;
-                    }
-                }
+                app = firebase.initializeApp(firebaseConfig);
+                authInstance = firebase.auth(app);
+                db = firebase.firestore(app);
                 
-                // 4. 設定身份驗證狀態
-                const currentUserId = user ? user.uid : null;
-                const isAdminGlobal = currentUserId ? ADMIN_IDS.includes(currentUserId) : false;
+                console.log("Firebase 應用程式初始化成功。");
 
-                setState({ 
-                    userId: currentUserId, 
-                    isAuthReady: true, // <-- 確保在這裡設定為 true
-                    isAdminGlobal: isAdminGlobal,
-                });
-                console.log("使用者 ID:", currentUserId || 'N/A', "管理員:", isAdminGlobal);
-
-                // 5. 啟動資料監聽器 (確保只啟動一次，且只有在有 UID 時才啟動)
-                if (currentUserId && !isListenersSetup) {
-                    setupDataListeners();
-                    isListenersSetup = true;
-                }
-                
-                // 6. 設置持續的身份驗證狀態變更監聽器
-                onAuthStateChanged(auth, (user) => {
-                    const changedUserId = user ? user.uid : null;
-                    if (changedUserId !== state.userId) {
-                         setState({ 
-                            userId: changedUserId, 
-                            isAdminGlobal: changedUserId ? ADMIN_IDS.includes(changedUserId) : false 
-                         });
-                         if (changedUserId && !isListenersSetup) {
-                            setupDataListeners();
-                            isListenersSetup = true;
-                         } else if (!changedUserId) {
-                            setState({ projects: [], assignees: [], isListenersSetup: false });
-                         }
+                // 註冊認證狀態變更監聽器
+                firebase.auth().onAuthStateChanged(user => {
+                    if (user) {
+                        console.log("使用者已登入，UID:", user.uid);
+                    } else {
+                        console.log("使用者已登出或未登入。");
                     }
                 });
 
-                // 7. 開始時鐘更新
-                setInterval(() => {
-                    setState({ currentTime: getFormattedDate() });
-                }, 1000);
-
-            } catch (error) {
-                console.error("Firebase 初始化失敗 (可能是配置錯誤): ", error);
-                // 確保無論如何都會結束初始化等待
-                setState({ isDbConnected: false, isAuthReady: true });
-            }
-        }
-        
-        // 資料監聽器 (在 userId 可用後啟動)
-        function setupDataListeners() {
-            if (!state.db || !state.userId) {
-                console.error("無法設置資料監聽器：DB 或 User ID 缺失。");
-                return;
-            }
-            
-            console.log("資料監聽器已啟動...");
-
-            // 監聽專案 (Projects)
-            const unsubscribeProjects = onSnapshot(query(collection(state.db, PROJECTS_PATH)), (snapshot) => {
-                const projectsData = snapshot.docs.map(doc => ({
-                    id: doc.id,
-                    ...doc.data()
-                }));
-                projectsData.sort((a, b) => (b.createdAt?.toDate() || new Date(0)) - (a.createdAt?.toDate() || new Date(0)));
-                setState({ projects: projectsData, isDbConnected: true });
-            }, (error) => {
-                console.error("獲取專案資料錯誤: ", error);
-                // 這裡通常是安全規則錯誤，但在程式層面我們假設是斷線
-                setState({ isDbConnected: false }); 
-            });
-
-            // 監聽處理人 (Assignees)
-            const unsubscribeAssignees = onSnapshot(query(collection(state.db, ASSIGNEES_PATH)), (snapshot) => {
-                const assigneesData = snapshot.docs.map(doc => ({
-                    id: doc.id,
-                    ...doc.data()
-                }));
-                setState({ assignees: assigneesData, isDbConnected: true });
-                if (!state.isAssigneesSeeded && assigneesData.length === 0) {
-                    seedAssignees();
-                } else if (!state.isAssigneesSeeded) {
-                    setState({ isAssigneesSeeded: true });
-                }
-            }, (error) => {
-                console.error("獲取處理人資料錯誤: ", error);
-                setState({ isDbConnected: false });
-            });
-
-            // 監聽配置 (Config)
-            const configDocRef = doc(state.db, CONFIG_PATH, CONFIG_DOC_ID);
-            const unsubscribeConfig = onSnapshot(configDocRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    setState({ targetVersion: data.targetVersion || state.currentVersion, isDbConnected: true });
+                // 處理 Canvas Custom Token 或匿名登入
+                const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                
+                if (token) {
+                    await authInstance.signInWithCustomToken(token);
+                    console.log("Signed in with Custom Token.");
                 } else {
-                    setState({ targetVersion: state.currentVersion, isDbConnected: true });
-                    // 如果配置不存在，嘗試設定一個預設版本
-                    if (state.isAdminGlobal) {
-                         setDoc(configDocRef, { targetVersion: state.currentVersion, createdAt: new Date() }, { merge: true }).catch(e => console.error("Error setting initial config:", e));
-                    }
+                    // 備用：如果沒有 Custom Token (Vercel/本地運行)，則使用匿名登入
+                    await authInstance.signInAnonymously();
+                    console.log("Signed in anonymously (Fallback).");
                 }
-            }, (error) => {
-                console.error("獲取配置資料錯誤: ", error);
-                setState({ isDbConnected: false });
-            });
-
-            // 註冊清理函數
-            window.cleanupListeners = () => {
-                unsubscribeProjects();
-                unsubscribeAssignees();
-                unsubscribeConfig();
-            };
-        }
-
-        // 資料種子 (確保有預設的 Assignees)
-        async function seedAssignees() {
-            if (!state.db) return;
-            setState({ isAssigneesSeeded: true }); 
-            
-            // 確保第一個種子處理人的 linkedUserId 是管理員的 UID (或測試用的 UID)
-            const usersToSeed = [
-                { name: 'Jacky Test (管理員)', email: 'jacky@vercelfire.com', linkedUserId: state.userId }, 
-                { name: 'Phone Worker (一般用戶)', email: 'phone@vercelfire.com', linkedUserId: '' }, 
-            ];
-
-            try {
-                const assigneesRef = collection(state.db, ASSIGNEES_PATH);
-                const batch = writeBatch(state.db);
                 
-                usersToSeed.forEach((user) => {
-                    const newDocRef = doc(assigneesRef);
-                    batch.set(newDocRef, {
-                        ...user,
-                        createdAt: new Date(),
-                        createdBy: state.userId || 'system-seed-no-auth'
-                    });
-                });
-                
-                await batch.commit();
-                console.log("Initial assignees seeded successfully.");
+                return { db, authInstance };
             } catch (error) {
-                console.error("Error seeding initial assignees: ", error);
+                // ** 此處會捕捉到 auth/api-key-not-valid 錯誤 **
+                console.error("匿名登入失敗。 Firestore 將無法存取公共資料。錯誤:", error);
+                return { db: null, authInstance: null };
             }
-        }
+        };
 
         // ----------------------------------------------------------------------
-        // 4. CRUD OPERATIONS
-        // ----------------------------------------------------------------------
-
-        async function handleAddProject(formData) {
-            if (!state.userId) { showNotification('錯誤', '請先完成身份驗證。'); return; }
-            
-            const { name, priority, deadline, assigneeId } = formData;
-            const selectedAssignee = state.assignees.find(a => a.id === assigneeId);
-
-            if (!selectedAssignee) {
-                showNotification('錯誤', '請選擇一位有效的處理人。');
-                return;
-            }
-
-            try {
-                const newProject = {
-                    name: name.trim(),
-                    priority: priority,
-                    status: 'Pending',
-                    deadline: deadline,
-                    assigneeId: assigneeId,
-                    assigneeName: selectedAssignee.name,
-                    assigneeEmail: selectedAssignee.email,
-                    linkedUserId: selectedAssignee.linkedUserId || null,
-                    createdAt: new Date(),
-                    updatedAt: getFormattedDate(),
-                    createdBy: state.userId 
-                };
-                await addDoc(collection(state.db, PROJECTS_PATH), newProject); 
-                openEmailModal(selectedAssignee.name, selectedAssignee.email, newProject.name);
-                showNotification('成功', '專案已成功新增並指派！');
-                document.getElementById('project-form').reset();
-            } catch (error) {
-                console.error("Error adding project: ", error);
-                showNotification('錯誤', '新增專案失敗。');
-            }
-        }
-        
-        async function toggleProjectStatus(projectId, currentStatus) {
-            if (!state.userId) { showNotification('錯誤', '請先完成身份驗證。'); return; }
-            
-            const statusMap = ['Pending', 'In Progress', 'Blocked', 'Completed'];
-            const currentIdx = statusMap.indexOf(currentStatus);
-            const nextIdx = (currentIdx + 1) % statusMap.length;
-            const nextStatus = statusMap[nextIdx];
-
-            try {
-                await updateDoc(doc(state.db, PROJECTS_PATH, projectId), {
-                    status: nextStatus,
-                    updatedAt: getFormattedDate()
-                });
-                showNotification('狀態更新', `專案狀態已更新為「${nextStatus}」。`);
-            } catch (error) {
-                console.error("Error updating status: ", error);
-                showNotification('錯誤', '更新狀態失敗。');
-            }
-        }
-
-        async function deleteProject(projectId, projectName) {
-            if (!state.userId) { showNotification('錯誤', '請先完成身份驗證。'); return; }
-            
-            try {
-                await deleteDoc(doc(state.db, PROJECTS_PATH, projectId));
-                showNotification('刪除成功', `專案「${projectName}」已成功移除。`);
-            } catch (error) {
-                console.error("Error deleting project: ", error);
-                showNotification('錯誤', '刪除專案失敗。');
-            }
-        }
-        
-        async function updateAssignee(projectId, newAssigneeId, projectName, onCloseModal) {
-            if (!state.userId) { showNotification('錯誤', '請先完成身份驗證。'); onCloseModal(); return; }
-            
-            if (!newAssigneeId) {
-                showNotification('警告', '請選擇一位新的處理人。');
-                return;
-            }
-            
-            const newAssignee = state.assignees.find(a => a.id === newAssigneeId);
-            if (!newAssignee) {
-                showNotification('錯誤', '無效的處理人 ID。');
-                return;
-            }
-
-            try {
-                await updateDoc(doc(state.db, PROJECTS_PATH, projectId), { 
-                    assigneeId: newAssignee.id,
-                    assigneeName: newAssignee.name,
-                    assigneeEmail: newAssignee.email,
-                    linkedUserId: newAssignee.linkedUserId || null,
-                    updatedAt: getFormattedDate()
-                });
-                
-                showNotification('更換成功', `專案「${projectName}」已重新指派給：${newAssignee.name}。`);
-                openEmailModal(newAssignee.name, newAssignee.email, projectName, true);
-                onCloseModal();
-            } catch (error) {
-                console.error("Error changing assignee: ", error);
-                showNotification('錯誤', '更換處理人失敗。');
-            }
-        }
-        
-        async function handleAddAssignee(formData) {
-            if (!state.userId) { showNotification('錯誤', '請先完成身份驗證。'); return; }
-            
-            const { name, email, linkedUserId } = formData;
-            if (!name || !email) {
-                showNotification('錯誤', '姓名和郵箱不能為空！');
-                return;
-            }
-            
-            try {
-                await addDoc(collection(state.db, ASSIGNEES_PATH), { 
-                    name: name.trim(),
-                    email: email.trim().toLowerCase(),
-                    linkedUserId: linkedUserId.trim() || null,
-                    createdAt: new Date(),
-                    createdBy: state.userId
-                });
-                showNotification('成功', `已成功新增處理人：${name} (${email})`);
-                document.getElementById('assignee-form').reset();
-            } catch (error) {
-                console.error("Error adding assignee: ", error);
-                showNotification('錯誤', '新增處理人失敗，請檢查控制台。');
-            }
-        }
-
-        async function handleUpdateVersion(newTargetVersion) {
-            if (!state.userId) { showNotification('錯誤', '請先完成身份驗證。'); return; }
-            
-            const versionRegex = /^\d+(\.\d+){0,2}$/;
-            if (!newTargetVersion || !versionRegex.test(newTargetVersion)) {
-                showNotification('錯誤', '請輸入有效的版本號 (例如: 1.0.1)');
-                return;
-            }
-
-            try {
-                const configDocRef = doc(state.db, CONFIG_PATH, CONFIG_DOC_ID);
-                
-                await setDoc(configDocRef, {
-                    targetVersion: newTargetVersion.trim(),
-                    updatedBy: state.userId,
-                    updatedAt: new Date()
-                }, { merge: true });
-
-                showNotification('成功', `目標版本已更新為 ${newTargetVersion.trim()}。用戶將被通知重新整理。`);
-            } catch (error) {
-                console.error("Error updating target version: ", error);
-                showNotification('錯誤', '更新目標版本失敗，請檢查控制台。');
-            }
-        }
-        
-        // ----------------------------------------------------------------------
-        // 5. MODAL RENDERING FUNCTIONS
+        // 3. UI COMPONENTS
         // ----------------------------------------------------------------------
         
-        // 通用模態框渲染函數
-        function renderModal(config, containerId, contentHtml) {
-            const container = document.getElementById(containerId);
-            if (!container) return;
-
-            if (!config.isOpen) {
-                container.innerHTML = '';
-                return;
-            }
-
-            const modalHtml = `
-                <div id="${containerId}-overlay" class="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 p-4">
-                    <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-lg transform transition-all duration-300 scale-100">
-                        <h3 class="text-xl font-semibold mb-4 text-gray-800 border-b pb-2">${config.title}</h3>
-                        <div class="mb-6 text-gray-600">
-                            ${config.message ? `<p class="mb-4">${config.message}</p>` : ''}
-                            ${contentHtml}
-                        </div>
-                        <div class="flex justify-end space-x-3">
-                            <button 
-                                id="${containerId}-close-btn"
-                                class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition font-medium"
-                            >
-                                關閉
+        // 模態框組件
+        const Modal = ({ isOpen, title, children, onClose }) => {
+            if (!isOpen) return null;
+            return (
+                <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
+                        <div className="flex justify-between items-center border-b pb-3 mb-4">
+                            <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+                            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition">
+                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                             </button>
+                        </div>
+                        <div>
+                            {children}
                         </div>
                     </div>
                 </div>
-            `;
-            container.innerHTML = modalHtml;
-            
-            document.getElementById(`${containerId}-close-btn`).addEventListener('click', () => {
-                const modalStateName = containerId.includes('assignee-modal') ? 'assigneeModal' : 'notificationModal';
-                setState({ [modalStateName]: { ...state[modalStateName], isOpen: false } });
-            });
-        }
-        
-        function renderNotificationModal() {
-            let contentHtml = '';
-            if (state.notificationModal.isEmail && state.notificationModal.emailContent) {
-                const { to, subject, body } = state.notificationModal.emailContent;
-                contentHtml = `
-                    <div class="bg-gray-100 p-4 rounded-lg border border-gray-300 text-sm">
-                        <p class="font-semibold text-gray-800 mb-2 flex items-center">
-                             <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> 模擬郵件內容：
-                        </p>
-                        <p class="text-xs text-gray-500 mb-2">收件人: ${to}</p>
-                        <p class="text-xs text-gray-500 mb-2">主旨: ${subject}</p>
-                        <pre class="whitespace-pre-wrap font-mono p-3 bg-white border rounded-md text-gray-700">${body}</pre>
-                    </div>
-                `;
-            }
-            renderModal(state.notificationModal, 'modal-container', contentHtml);
-        }
-        
-        // 更換處理人表單 HTML
-        function getAssigneeFormHtml(projectId, projectName, currentAssigneeId) {
-            const currentAssignee = state.assignees.find(a => a.id === currentAssigneeId) || { name: '未知' };
-            const otherAssignees = state.assignees.filter(a => a.id !== currentAssigneeId);
-            
-            const assigneeOptions = otherAssignees.map(a => `
-                <option value="${a.id}">
-                    ${a.name} (${a.email})
-                </option>
-            `).join('');
+            );
+        };
 
-            return `
-                <form id="assignee-change-form" class="space-y-4">
-                    <p class="text-sm text-gray-600">
-                        專案名稱: <span class="font-medium text-gray-800">${projectName}</span>
+        // 處理人更換表單
+        const AssigneeChangeForm = ({ db, projectId, projectName, currentAssigneeId, assignees, onClose, showNotification, openEmailModal }) => {
+            const [selectedAssigneeId, setSelectedAssigneeId] = useState(currentAssigneeId);
+            const [isSubmitting, setIsSubmitting] = useState(false);
+            
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setIsSubmitting(true);
+                
+                try {
+                    const projectRef = db.collection(PROJECTS_PATH).doc(projectId);
+                    await projectRef.update({
+                        assigneeId: selectedAssigneeId,
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp() 
+                    });
+
+                    // 尋找舊的處理人和新的處理人名字
+                    const newAssignee = assignees.find(a => a.id === selectedAssigneeId) || { name: '未知' };
+                    const oldAssignee = assignees.find(a => a.id === currentAssigneeId) || { name: '未知' };
+
+                    showNotification('success', `成功將專案 [${projectName}] 的處理人從 ${oldAssignee.name} 更換為 ${newAssignee.name}。`);
+                    
+                    // 打開郵件確認模態框
+                    const newAssigneeEmail = newAssignee.email || '';
+                    openEmailModal(
+                        newAssigneeEmail, 
+                        `【專案轉移通知】您現在是專案 [${projectName}] 的處理人`,
+                        `您好 ${newAssignee.name},\n\n專案 [${projectName}] 已於 ${new Date().toLocaleString()} 轉交給您處理。\n\n原處理人：${oldAssignee.name}\n\n請登入儀表板查看詳情並開始處理。\n\n謝謝!`
+                    );
+
+                    onClose();
+                } catch (error) {
+                    console.error("更新處理人失敗:", error);
+                    showNotification('error', '更新處理人失敗。請查看 Console 獲取詳細資訊。');
+                } finally {
+                    setIsSubmitting(false);
+                }
+            };
+            
+            // 找到當前處理人的名字
+            const currentAssignee = assignees.find(a => a.id === currentAssigneeId)?.name || 'N/A';
+            
+            return (
+                <form onSubmit={handleSubmit}>
+                    <p className="mb-4 text-sm text-gray-600">
+                        目前專案 **{projectName}** 的處理人是: **{currentAssignee}**
                     </p>
-                    <p class="text-sm text-gray-600">
-                        當前處理人: <span class="font-medium text-indigo-600">${currentAssignee.name}</span>
-                    </p>
-                    <div class="mb-4">
-                        <label for="newAssignee" class="block text-sm font-medium text-gray-700 mb-1">選擇新的處理人</label>
-                        <select id="newAssignee" name="newAssigneeId" required 
-                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border bg-white">
-                            <option value="">-- 請選擇處理人 --</option>
-                            ${assigneeOptions}
+                    <div className="mb-4">
+                        <label htmlFor="assignee-select" className="block text-sm font-medium text-gray-700 mb-2">選擇新的處理人</label>
+                        <select
+                            id="assignee-select"
+                            value={selectedAssigneeId}
+                            onChange={(e) => setSelectedAssigneeId(e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                            required
+                            disabled={isSubmitting}
+                        >
+                            <option value="">-- 請選擇 --</option>
+                            {assignees.map((a) => (
+                                <option key={a.id} value={a.id}>{a.name} ({a.email})</option>
+                            ))}
                         </select>
                     </div>
-                    <div class="flex justify-end space-x-3 pt-2">
-                        <button type="button" id="assignee-change-cancel"
-                                class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition font-medium">
+                    <div className="flex justify-end space-x-3">
+                        <button 
+                            type="button" 
+                            onClick={onClose} 
+                            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 transition"
+                            disabled={isSubmitting}
+                        >
                             取消
                         </button>
-                        <button type="submit" id="assignee-change-submit"
-                                class="px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition disabled:opacity-50">
-                            確認更換
+                        <button 
+                            type="submit" 
+                            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition disabled:bg-blue-400"
+                            disabled={isSubmitting || selectedAssigneeId === currentAssigneeId}
+                        >
+                            {isSubmitting ? '更換中...' : '確認更換'}
                         </button>
                     </div>
                 </form>
-            `;
-        }
+            );
+        };
 
-        function renderAssigneeModal() {
-            const { isOpen, projectId, projectName, currentAssigneeId } = state.assigneeModal;
-            
-            if (!isOpen || !projectId) {
-                document.getElementById('assignee-modal-container').innerHTML = '';
-                return;
-            }
-            
-            const contentHtml = getAssigneeFormHtml(projectId, projectName, currentAssigneeId);
-            
-            // 渲染通用模態框結構
-            renderModal({ 
-                isOpen: true, 
-                title: "更換專案處理人", 
-                message: null 
-            }, 'assignee-modal-container', contentHtml);
-            
-            // 由於 renderModal 也會添加關閉按鈕，我們需要為表單按鈕添加特定的事件監聽器
-            
-            // 處理表單提交
-            const form = document.getElementById('assignee-change-form');
-            if (form) {
-                form.addEventListener('submit', (e) => {
-                    e.preventDefault();
-                    const newAssigneeId = document.getElementById('newAssignee').value;
-                    const closeCallback = () => setState({ assigneeModal: { ...state.assigneeModal, isOpen: false } });
-                    updateAssignee(projectId, newAssigneeId, projectName, closeCallback);
-                });
-            }
-            
-            // 處理取消按鈕
-            const cancelButton = document.getElementById('assignee-change-cancel');
-            if (cancelButton) {
-                cancelButton.addEventListener('click', () => {
-                    setState({ assigneeModal: { ...state.assigneeModal, isOpen: false } });
-                });
-            }
-
-            // 調整通用關閉按鈕的行為，使其只關閉 Assignee Modal
-            const generalCloseButton = document.getElementById('assignee-modal-container-close-btn');
-            if (generalCloseButton) {
-                generalCloseButton.removeEventListener('click', () => {
-                    const modalStateName = 'assigneeModal';
-                    setState({ [modalStateName]: { ...state[modalStateName], isOpen: false } });
-                });
-                generalCloseButton.addEventListener('click', () => {
-                    setState({ assigneeModal: { ...state.assigneeModal, isOpen: false } });
-                });
-            }
-        }
-        
-        // ----------------------------------------------------------------------
-        // 6. MAIN APP RENDERING FUNCTIONS
-        // ----------------------------------------------------------------------
-
-        function renderHeader() {
-            const isUpdateAvailable = state.targetVersion > state.currentVersion;
-            
-            const headerHtml = `
-                <header class="mb-6 flex justify-between items-center flex-wrap">
-                    <h1 class="text-3xl font-bold text-gray-900 flex items-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-indigo-600 mr-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                            <line x1="16" y1="2" x2="16" y2="6"></line>
-                            <line x1="8" y1="2" x2="8" y2="6"></line>
-                            <line x1="3" y1="10" x2="21" y2="10"></line>
-                        </svg>
-                        專案管理儀表板 (單一HTML版)
-                    </h1>
-                    <div class="text-sm text-gray-500 font-medium mt-2 md:mt-0 space-x-4">
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${state.isDbConnected ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
-                            伺服器: ${state.isDbConnected ? '連線' : '斷線'}
-                        </span>
-                        <span class="inline-flex items-center text-xs text-gray-700">
-                            版本: <span class="font-mono text-gray-900 ml-1">${state.currentVersion}</span>
-                        </span>
-                        <span class="inline-flex items-center text-xs text-gray-700">
-                            使用者 UID: <span class="text-gray-900 font-mono ml-1">${state.userId || 'N/A'}</span>
-                            ${state.isAdminGlobal ? '<span class="ml-2 text-pink-700 font-bold">(全局管理員)</span>' : ''}
-                        </span>
-                        <span class="text-xs text-gray-500">
-                            | ${state.currentTime}
-                        </span>
-                    </div>
-                </header>
-                
-                ${isUpdateAvailable ? `
-                    <div class="sticky top-0 z-40 bg-yellow-100 border-b border-yellow-300 p-3 mb-4 rounded-xl shadow-md flex justify-between items-center text-yellow-800 font-medium">
-                        <p>
-                            有新版本 <span class="font-bold text-pink-600">${state.targetVersion}</span> 可用！您目前版本為 <span class="font-bold">${state.currentVersion}</span>。
-                            請按 <span class="font-bold text-indigo-600">重新整理</span> 以獲取最新功能。
-                        </p>
-                        <button 
-                            onclick="window.location.reload()"
-                            class="px-4 py-1 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition shadow-lg text-sm flex items-center"
-                        >
-                             <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 mr-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9 9 0 0 0-9 9 9 9 0 0 0 9 9c2.478 0 4.793-.97 6.541-2.73"/></svg> 重新整理
-                        </button>
-                    </div>
-                ` : ''}
-            `;
-            return headerHtml;
-        }
-
-        function renderAdminPanel() {
-            if (!state.isAdminGlobal || !state.userId) return '';
-            
-            const assigneeItems = state.assignees.map(a => `
-                <li class="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                    <div class="font-medium text-gray-900 mb-1 flex justify-between items-center">
-                        <span>${a.name} (${a.email})</span>
-                    </div>
-                    <div class="text-xs text-gray-500 truncate">
-                        <span class="font-semibold text-gray-700 mr-1">Doc ID:</span> ${a.id}
-                    </div>
-                    ${a.linkedUserId ? `
-                        <div class="text-xs text-blue-600 truncate mt-1">
-                            <span class="font-semibold text-gray-700 mr-1">綁定 UID:</span> ${a.linkedUserId}
-                        </div>
-                    ` : `
-                        <div class="text-xs text-yellow-600 truncate mt-1">
-                            <span class="font-semibold text-gray-700 mr-1">綁定 UID:</span> 未綁定
-                        </div>
-                    `}
-                </li>
-            `).join('');
-
-            return `
-                <div class="bg-white p-6 rounded-xl shadow-lg mb-8 border border-gray-200">
-                    <h2 class="text-xl font-semibold mb-4 text-pink-700">管理員面板</h2>
-
-                    <!-- 版本控制區塊 -->
-                    <div class="mb-6 pb-4 border-b border-gray-100">
-                        <h3 class="text-lg font-medium mb-2 text-gray-700">應用程式版本控制</h3>
-                        <p class="text-sm text-gray-600 mb-3">
-                            當前部署版本: <span class="font-mono text-indigo-600">${state.currentVersion}</span> | 
-                            線上目標版本: <span class="font-mono text-pink-600">${state.targetVersion}</span>
-                        </p>
-                        <form id="version-form" class="flex space-x-3 items-center flex-wrap gap-y-2">
-                            <label for="targetVersion" class="text-sm font-medium text-gray-700 whitespace-nowrap">設定新目標版本:</label>
-                            <input type="text" id="targetVersion" name="targetVersion" value="${state.targetVersion}"
-                                placeholder="例如: 1.0.3" required
-                                class="w-full sm:w-40 rounded-md border-gray-300 shadow-sm focus:border-pink-500 focus:ring-pink-500 p-2 border text-sm"/>
-                            <button type="submit" id="update-version-btn"
-                                class="w-full sm:w-auto px-4 py-2 bg-pink-600 text-white font-semibold rounded-lg shadow-md hover:bg-pink-700 focus:outline-none focus:ring-2 focus:ring-pink-500 focus:ring-offset-2 transition transform hover:scale-105 disabled:opacity-50 text-sm">
-                                發布新版本
-                            </button>
-                        </form>
-                    </div>
-
-
-                    <!-- 新增處理人管理 -->
-                    <h3 class="text-lg font-medium mt-6 mb-2 text-gray-700 border-t pt-4">新增處理人 (並可選綁定使用者 ID)</h3>
-                    <form id="assignee-form" class="space-y-4">
-                        <div class="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
-                            <div>
-                                <label for="assigneeName" class="block text-sm font-medium text-gray-700">處理人姓名</label>
-                                <input type="text" id="assigneeName" name="name" placeholder="王小明" required
-                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-pink-500 focus:ring-pink-500 p-2 border"/>
-                            </div>
-                            <div>
-                                <label for="assigneeEmail" class="block text-sm font-medium text-gray-700">電子郵件</label>
-                                <input type="email" id="assigneeEmail" name="email" placeholder="example@work.com" required
-                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-pink-500 focus:ring-pink-500 p-2 border"/>
-                            </div>
-                            <div class="col-span-1 md:col-span-2">
-                                <label for="linkedUserId" class="block text-sm font-medium text-gray-700">綁定使用者 ID (選填)</label>
-                                <input type="text" id="linkedUserId" name="linkedUserId" placeholder="使用者在儀表板頂部的 ID"
-                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-pink-500 focus:ring-pink-500 p-2 border"/>
-                            </div>
-                            <button type="submit" 
-                                class="w-full md:w-auto px-4 py-2 bg-pink-600 text-white font-semibold rounded-lg shadow-md hover:bg-pink-700 focus:outline-none focus:ring-2 focus:ring-pink-500 focus:ring-offset-2 transition transform hover:scale-105 disabled:opacity-50">
-                                新增處理人
-                            </button>
-                        </div>
-                    </form>
-
-                    <h3 class="text-lg font-medium mt-6 mb-2 text-gray-700">現有處理人 (${state.assignees.length})</h3>
-                    <p class="text-xs text-red-500 mb-2">
-                        *注意：更換專案處理人時，您需要選擇下列處理人。
-                    </p>
-                    <ul class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm text-gray-600">
-                        ${assigneeItems}
-                    </ul>
-                </div>
-            `;
-        }
-
-        function renderProjectForm() {
-            if (!state.userId) return '';
-            
-            const assigneeOptions = state.assignees.map(a => `
-                <option value="${a.id}">
-                    ${a.name} ${a.linkedUserId ? ' (已綁定)' : ' (未綁定)'}
-                </option>
-            `).join('');
-            
-            return `
-                <div class="bg-white p-6 rounded-xl shadow-lg mb-8 border border-gray-200">
-                    <h2 class="text-xl font-semibold mb-4 text-indigo-700">新增專案</h2>
-                    <form id="project-form" class="space-y-4">
-                        <div class="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
-                            <!-- 專案名稱 -->
-                            <div class="col-span-1 md:col-span-2">
-                                <label for="pName" class="block text-sm font-medium text-gray-700">專案名稱</label>
-                                <input type="text" id="pName" name="name" placeholder="輸入專案名稱..." required
-                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border"/>
-                            </div>
-
-                            <!-- 處理人下拉選單 -->
-                            <div>
-                                <label for="pAssignee" class="block text-sm font-medium text-gray-700">指派處理人</label>
-                                <select id="pAssignee" name="assigneeId" required 
-                                        class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border bg-white">
-                                    <option value="">請選擇...</option>
-                                    ${assigneeOptions}
-                                </select>
-                            </div>
-
-                            <!-- 優先程度 -->
-                            <div>
-                                <label for="pPriority" class="block text-sm font-medium text-gray-700">優先程度</label>
-                                <select id="pPriority" name="priority"
-                                        class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border bg-white">
-                                    <option value="Medium">中</option>
-                                    <option value="High">高</option>
-                                    <option value="Low">低</option>
-                                </select>
-                            </div>
-
-                            <!-- 截止日 -->
-                            <div>
-                                <label for="pDeadline" class="block text-sm font-medium text-gray-700">截止日</label>
-                                <input type="date" id="pDeadline" name="deadline" value="${new Date().toISOString().split('T')[0]}" required
-                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border"/>
-                            </div>
-
-                            <!-- 按鈕 -->
-                            <button type="submit" id="add-project-btn" ${state.assignees.length === 0 ? 'disabled' : ''}
-                                class="w-full md:w-auto px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition transform hover:scale-105 disabled:opacity-50">
-                                新增專案
-                            </button>
-                        </div>
-                        ${state.assignees.length === 0 ? '<p class="col-span-6 text-sm text-red-500">請先在管理員面板新增處理人。</p>' : ''}
-                    </form>
-                </div>
-            `;
-        }
-        
-        function renderProjectList() {
-            // 如果 isAuthReady 為 true 且 userId 仍然是 null，表示登入徹底失敗
-            if (state.isAuthReady && !state.userId) {
-                return `
-                    <h2 class="text-2xl font-bold text-gray-800 mb-4">所有專案 (無法存取)</h2>
-                    <div class="bg-white rounded-xl shadow-lg p-6 text-center text-red-500 border border-red-200">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 inline-block mr-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                        <strong>致命錯誤：</strong> 身份驗證失敗，無法獲取有效的使用者 ID。請確保 **Canvas 環境** 正確提供了 \`__initial_auth_token\`，或您的 **Firestore 安全規則** 允許匿名存取。
-                        <p class="mt-2 text-sm text-gray-600">目前無法讀取/寫入公共資料。</p>
-                    </div>
-                `;
-            }
-
-            if (state.projects.length === 0 && state.isAuthReady) {
-                return `
-                    <h2 class="text-2xl font-bold text-gray-800 mb-4">所有專案 (0)</h2>
-                    <div class="bg-white rounded-xl shadow-lg p-6 text-center text-gray-500 border border-gray-200">
-                        目前沒有專案。請在上方新增您的第一個專案！
-                    </div>
-                `;
-            }
-            
-            if (state.projects.length === 0 && !state.isAuthReady) {
-                 return `<!-- 仍在等待驗證，將由 renderApp 處理 -->`;
-            }
-
-            const tableRows = state.projects.map(proj => {
-                const priorityClass = `priority-${proj.priority}`;
-                const statusClass = `status-${proj.status.replace(/\s/g, '')}`;
-                
-                // 檢查權限：專案創建者、指派人 (透過綁定的 UID) 或全局管理員
-                const isProjectCreator = state.userId === proj.createdBy;
-                const isAssignee = proj.linkedUserId ? state.userId === proj.linkedUserId : false;
-                const canReassign = state.isAdminGlobal || isProjectCreator || isAssignee;
-                const canDelete = state.isAdminGlobal || isProjectCreator;
-                
-                return `
-                    <tr class="hover:bg-gray-50 transition duration-150">
-                        <td data-label="專案名稱" class="px-6 py-4 whitespace-normal font-medium text-gray-900">${proj.name}</td>
-                        <td data-label="優先級" class="px-6 py-4 whitespace-nowrap">
-                            <span class="badge ${priorityClass}">${proj.priority}</span>
-                        </td>
-                        <td data-label="處理人" class="px-6 py-4 whitespace-nowrap text-gray-700">
-                            ${proj.assigneeName} 
-                            ${isProjectCreator ? '<span class="ml-1 text-xs text-pink-500">(創建者)</span>' : ''} 
-                            ${isAssignee && !isProjectCreator ? '<span class="ml-1 text-xs text-blue-500">(我)</span>' : ''} 
-                        </td>
-                        <td data-label="狀態" class="px-6 py-4 whitespace-nowrap">
-                            <button data-id="${proj.id}" data-status="${proj.status}" class="status-toggle-btn badge ${statusClass} hover:opacity-80 transition">
-                                ${proj.status}
-                            </button>
-                        </td>
-                        <td data-label="截止日" class="px-6 py-4 whitespace-nowrap text-gray-600">${proj.deadline}</td>
-                        <td data-label="最後更新時間" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${proj.updatedAt}</td>
-                        <td data-label="操作" class="px-6 py-4 whitespace-nowrap flex flex-col items-start sm:flex-row sm:items-center space-y-2 sm:space-y-0 sm:space-x-3">
-                            
-                            ${canReassign ? `
-                                <button data-id="${proj.id}" data-name="${proj.name}" data-assignee-id="${proj.assigneeId}" class="reassign-btn text-blue-600 hover:text-blue-900 font-medium transition transform hover:scale-105 text-left text-xs sm:text-sm flex items-center">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v5"/><path d="M17 11h6"/></svg> 更換處理人
-                                </button>
-                            ` : ''}
-
-                            ${canDelete ? `
-                                <button data-id="${proj.id}" data-name="${proj.name}" class="delete-btn text-red-600 hover:text-red-900 font-medium transition transform hover:scale-105 text-left text-xs sm:text-sm">
-                                    刪除
-                                </button>
-                            ` : ''}
-                        </td>
-                    </tr>
-                `;
-            }).join('');
-
-            return `
-                <h2 class="text-2xl font-bold text-gray-800 mb-4">所有專案 (${state.projects.length})</h2>
-                <div class="bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-50">
-                            <tr>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell" width="20%">專案名稱</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell" width="10%">優先級</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell" width="15%">處理人</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell" width="10%">狀態</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell" width="10%">截止日</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell" width="20%">最後更新時間</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell" width="15%">操作</th>
-                            </tr>
-                        </thead>
-                        <tbody class="bg-white divide-y divide-gray-200">
-                            ${tableRows}
-                        </tbody>
-                    </table>
-                </div>
-            `;
-        }
 
         // ----------------------------------------------------------------------
-        // 7. MAIN RENDERER AND EVENT ATTACHMENT
+        // 4. MAIN APPLICATION COMPONENT
         // ----------------------------------------------------------------------
 
-        function renderApp() {
-            const appDiv = document.getElementById('app');
-            if (!state.isAuthReady) {
-                // 如果 isAuthReady 仍為 false，顯示載入/等待畫面
-                appDiv.innerHTML = `
-                    <div class="text-center p-12 text-lg text-indigo-600">
-                        <svg class="animate-spin h-8 w-8 text-indigo-600 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <strong>正在連接 Firebase:</strong> 系統正在等待使用者身份驗證完成...
-                    </div>
-                `;
-                return;
-            }
+        const App = () => {
+            const [db, setDb] = useState(null);
+            const [auth, setAuth] = useState(null);
+            const [projects, setProjects] = useState([]);
+            const [assignees, setAssignees] = useState([]);
+            const [config, setConfig] = useState({});
+            const [userId, setUserId] = useState('N/A');
+            const [isAdmin, setIsAdmin] = useState(false);
+            const [isDbConnected, setIsDbConnected] = useState(true);
+            const [loading, setLoading] = useState(true);
+            const [notification, setNotification] = useState({ visible: false, type: 'success', message: '' });
 
-            // 組合完整的 HTML
-            appDiv.innerHTML = `
-                ${renderHeader()}
-                <div class="container mx-auto max-w-7xl">
-                    ${renderAdminPanel()}
-                    ${renderProjectForm()}
-                    ${renderProjectList()}
-                </div>
-            `;
-            
-            // 渲染模態框
-            renderNotificationModal();
-            renderAssigneeModal();
-            
-            // 重新渲染後，重新附加所有事件監聽器
-            attachEventListeners();
-        }
-        
-        function attachEventListeners() {
-            // 1. 專案表單提交
-            const projectForm = document.getElementById('project-form');
-            if (projectForm) {
-                projectForm.onsubmit = (e) => {
-                    e.preventDefault();
-                    const formData = new FormData(projectForm);
-                    const data = Object.fromEntries(formData.entries());
-                    handleAddProject(data);
-                };
-            }
-            
-            // 2. 狀態切換按鈕
-            document.querySelectorAll('.status-toggle-btn').forEach(button => {
-                button.onclick = (e) => {
-                    e.stopPropagation();
-                    const projectId = button.dataset.id;
-                    const currentStatus = button.dataset.status;
-                    toggleProjectStatus(projectId, currentStatus);
-                };
+            // 模態框狀態
+            const [notificationModalConfig, setNotificationModalConfig] = useState({
+                isOpen: false,
+                emailContent: { to: '', subject: '', body: '' }
             });
-            
-            // 3. 刪除按鈕
-            document.querySelectorAll('.delete-btn').forEach(button => {
-                button.onclick = (e) => {
-                    e.stopPropagation();
-                    const projectId = button.dataset.id;
-                    const projectName = button.dataset.name;
-                    // 為了避免意外刪除，這裡只是記錄。在實際應用中，您應該使用帶有確認按鈕的自定義模態框。
-                    showNotification('確認刪除', `您確定要永久刪除專案「${projectName}」嗎？點擊「關閉」將取消操作。`);
-                    console.log(`[ACTION BLOCKED]: Project "${projectName}" (ID: ${projectId}) delete attempted. Implement a custom confirmation modal. If you want to delete immediately, uncomment the deleteProject call.`);
-                    // deleteProject(projectId, projectName); // 立即刪除 (如果需要)
-                };
+            const [assigneeModalConfig, setAssigneeModalConfig] = useState({
+                isOpen: false,
+                projectId: null,
+                projectName: '',
+                currentAssigneeId: null,
             });
+
+            // 顯示通知訊息
+            const showNotification = useCallback((type, message) => {
+                setNotification({ visible: true, type, message });
+                setTimeout(() => {
+                    setNotification({ visible: false, type, message: '' });
+                }, 4000);
+            }, []);
+
+            // 打開郵件模態框
+            const openEmailModal = (to, subject, body) => {
+                setNotificationModalConfig({
+                    isOpen: true,
+                    emailContent: { to, subject, body }
+                });
+            };
+
+            // 初始化 Firebase 和登入
+            useEffect(() => {
+                initFirebase().then(({ db: initializedDb, auth: initializedAuth }) => {
+                    setDb(initializedDb);
+                    setAuth(initializedAuth);
+                    setLoading(false);
+                });
+            }, []);
             
-            // 4. 更換處理人按鈕
-            document.querySelectorAll('.reassign-btn').forEach(button => {
-                button.onclick = (e) => {
-                    e.stopPropagation();
-                    const projectId = button.dataset.id;
-                    const projectName = button.dataset.name;
-                    const currentAssigneeId = button.dataset.assigneeId;
-                    setState({
-                        assigneeModal: {
-                            isOpen: true,
-                            projectId,
-                            projectName,
-                            currentAssigneeId,
+            // 監聽使用者認證狀態
+            useEffect(() => {
+                if (auth) {
+                    const unsubscribeAuth = auth.onAuthStateChanged(user => {
+                        if (user) {
+                            setUserId(user.uid);
+                            // 簡單判斷：如果是特定 UID 則設為管理員 (應在後端判斷)
+                            setIsAdmin(user.uid === 'YOUR_ADMIN_UID'); 
+                        } else {
+                            setUserId('N/A');
+                            setIsAdmin(false);
                         }
                     });
+                    return () => unsubscribeAuth();
+                }
+            }, [auth]);
+
+            // 監聽 Firestore 資料
+            useEffect(() => {
+                if (!db) return;
+
+                const unsubscribeProjects = db.collection(PROJECTS_PATH).onSnapshot((snapshot) => {
+                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setProjects(data);
+                    setIsDbConnected(true);
+                }, (error) => {
+                    console.error("Error fetching projects: ", error);
+                    setIsDbConnected(false);
+                    showNotification('error', '無法載入專案資料，請檢查 Firebase 連線或權限。');
+                });
+                
+                const unsubscribeAssignees = db.collection(ASSIGNEES_PATH).onSnapshot((snapshot) => {
+                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setAssignees(data);
+                }, (error) => {
+                    console.error("Error fetching assignees: ", error);
+                });
+
+                const unsubscribeConfig = db.collection(CONFIG_PATH).onSnapshot((snapshot) => {
+                    const data = snapshot.docs.reduce((acc, doc) => ({ ...acc, [doc.id]: doc.data() }), {});
+                    setConfig(data);
+                }, (error) => {
+                    console.error("Error fetching config: ", error);
+                });
+
+                return () => {
+                    unsubscribeProjects();
+                    unsubscribeAssignees();
+                    unsubscribeConfig();
                 };
-            });
+            }, [db, showNotification]);
+
+            // 獲取處理人名稱的函數
+            const getAssigneeName = useCallback((assigneeId) => {
+                return assignees.find(a => a.id === assigneeId)?.name || '未指派';
+            }, [assignees]);
+
+            // 根據專案狀態獲取樣式
+            const getStatusStyle = (status) => {
+                switch (status) {
+                    case 'New': return 'bg-red-100 text-red-800';
+                    case 'In Progress': return 'bg-blue-100 text-blue-800';
+                    case 'Completed': return 'bg-green-100 text-green-800';
+                    default: return 'bg-gray-100 text-gray-800';
+                }
+            };
             
-            // 5. 管理員面板事件 (新增處理人表單)
-            const assigneeForm = document.getElementById('assignee-form');
-            if (assigneeForm) {
-                assigneeForm.onsubmit = (e) => {
-                    e.preventDefault();
-                    const formData = new FormData(assigneeForm);
-                    const data = Object.fromEntries(formData.entries());
-                    handleAddAssignee(data);
-                };
-            }
+            // 渲染狀態標籤
+            const StatusBadge = ({ status }) => (
+                <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusStyle(status)}`}>
+                    {status}
+                </span>
+            );
 
-            // 6. 管理員面板事件 (版本更新表單)
-            const versionForm = document.getElementById('version-form');
-            if (versionForm) {
-                versionForm.onsubmit = (e) => {
-                    e.preventDefault();
-                    const newTargetVersion = document.getElementById('targetVersion').value;
-                    handleUpdateVersion(newTargetVersion);
-                };
-            }
-        }
+            // 渲染專案列表
+            const ProjectList = useMemo(() => {
+                if (loading) {
+                    return <p className="text-center py-10 text-gray-500">初始化中...</p>;
+                }
 
-        // ----------------------------------------------------------------------
-        // 8. LIFECYCLE HOOKS (啟動應用程式)
-        // ----------------------------------------------------------------------
+                if (!db) {
+                    return <p className="text-center py-10 text-red-500 font-semibold">資料庫連線失敗。請檢查 API Key 或權限。</p>;
+                }
 
-        // 啟動 Firebase 並開始身份驗證流程
-        initFirebase();
-        
-        // 初始渲染
-        renderApp();
+                return (
+                    <div className="bg-white shadow overflow-hidden sm:rounded-lg mt-6">
+                        <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50">
+                                <tr>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4">專案名稱</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4">狀態</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4">處理人</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                                {projects.length === 0 ? (
+                                    <tr>
+                                        <td colSpan="4" className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                                            目前沒有專案。
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    projects.map((project) => (
+                                        <tr key={project.id}>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                                {project.name}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <StatusBadge status={project.status} />
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                {getAssigneeName(project.assigneeId)}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                                <button
+                                                    onClick={() => setAssigneeModalConfig({
+                                                        isOpen: true,
+                                                        projectId: project.id,
+                                                        projectName: project.name,
+                                                        currentAssigneeId: project.assigneeId
+                                                    })}
+                                                    className="inline-flex items-center px-3 py-1 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                                    disabled={!db}
+                                                >
+                                                    <Users className="w-4 h-4 mr-2" />
+                                                    更換處理人
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                );
+            }, [projects, loading, db, getAssigneeName]);
 
+            return (
+                <div className="min-h-screen bg-gray-50 p-6">
+                    <div className="max-w-7xl mx-auto">
+                        
+                        {/* 頂部狀態列 */}
+                        <div className="flex justify-between items-center pb-6 border-b border-gray-200">
+                            <h1 className="text-3xl font-bold text-gray-900">專案管理儀表板</h1>
+                            <div className="flex items-center space-x-4">
+                                <div className={`px-3 py-1 rounded-full text-sm font-medium ${isDbConnected ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                    DB 狀態: {isDbConnected ? '連線中' : '中斷'}
+                                </div>
+                                <div className="text-sm text-gray-600">
+                                    使用者 UID: <span className="font-mono">{userId}</span>
+                                </div>
+                                <div className="text-sm text-gray-600">
+                                    管理員: <span className="font-medium">{isAdmin ? '是' : '否'}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 通知區域 */}
+                        {notification.visible && (
+                            <div className={`mt-4 p-4 rounded-md flex items-center ${notification.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                                {notification.type === 'success' ? <CheckCircle className="w-5 h-5 mr-3" /> : <XCircle className="w-5 h-5 mr-3" />}
+                                <p className="text-sm font-medium">{notification.message}</p>
+                            </div>
+                        )}
+
+                        {/* 專案列表 */}
+                        {ProjectList}
+                        
+                        {/* 模態框容器 */}
+
+                        {/* 1. 郵件通知模態框 (用於模擬發送郵件後的確認) */}
+                        <Modal
+                            isOpen={notificationModalConfig.isOpen}
+                            title="模擬郵件通知"
+                            onClose={() => setNotificationModalConfig({ ...notificationModalConfig, isOpen: false })}
+                        >
+                            <p className="text-sm text-gray-600 mb-4">這封郵件將會發送給新的處理人，以通知專案轉移。</p>
+                            {notificationModalConfig.emailContent && (
+                                <div className="bg-gray-50 p-4 rounded-md">
+                                    <p className="text-xs text-gray-500 mb-2">收件人: {notificationModalConfig.emailContent.to}</p>
+                                    <p className="text-xs text-gray-500 mb-2">主旨: {notificationModalConfig.emailContent.subject}</p>
+                                    <pre className="whitespace-pre-wrap font-mono p-3 bg-white border rounded-md text-gray-700">
+                                        {notificationModalConfig.emailContent.body}
+                                    </pre>
+                                </div>
+                            )}
+                        </Modal>
+                        
+                        {/* 2. 更換處理人模態框 */}
+                        <Modal
+                            isOpen={assigneeModalConfig.isOpen}
+                            title="更換專案處理人"
+                            onClose={() => setAssigneeModalConfig({ ...assigneeModalConfig, isOpen: false })}
+                        >
+                            {db && assignees.length > 0 && assigneeModalConfig.projectId && (
+                                <AssigneeChangeForm
+                                    db={db}
+                                    projectId={assigneeModalConfig.projectId}
+                                    projectName={assigneeModalConfig.projectName}
+                                    currentAssigneeId={assigneeModalConfig.currentAssigneeId}
+                                    assignees={assignees}
+                                    onClose={() => setAssigneeModalConfig({ ...assigneeModalConfig, isOpen: false })}
+                                    showNotification={showNotification}
+                                    openEmailModal={openEmailModal}
+                                />
+                            )}
+                        </Modal>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
     </script>
 </body>
 </html>
