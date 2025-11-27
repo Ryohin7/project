@@ -1,170 +1,1227 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Mail, UserPlus, Trash2, Shield, AlertTriangle, CheckCircle } from 'lucide-react';
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>專案儀表板 - 需註冊才能新增</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 設定 Tailwind CSS 配置，使用 Inter 字體和標準色調 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary-500': '#4f46e5', // Indigo-600
+                        'primary-600': '#4338ca', // Indigo-700
+                        'teal-500': '#14b8a6', // For Admin features
+                        'teal-600': '#0d9488',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'Noto Sans', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- Firebase SDKs (使用兼容版本) -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    
+    <!-- React & ReactDOM (指定版本 18.2.0) -->
+    <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div id="root"></div>
 
-// -----------------------------------------------------------------------------
-// 模擬資料庫與驗證服務
-// -----------------------------------------------------------------------------
-const MOCK_DB = {
-  users: [
-    { id: 'user-001', email: 'alice@example.com', name: 'Alice', isVerified: true, role: 'Admin' },
-    { id: 'user-002', email: 'bob@example.com', name: 'Bob', isVerified: false, role: 'User' },
-    { id: 'user-003', email: 'charlie@example.com', name: 'Charlie', isVerified: true, role: 'User' },
-  ],
-  projects: [
-    { id: 'proj-001', name: '專案 A - 網站開發' },
-    { id: 'proj-002', name: '專案 B - 行銷活動' },
-    { id: 'proj-003', name: '專案 C - 產品研究' },
-  ]
-};
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useMemo } = React;
+        
+        // ----------------------------------------------------------------------
+        // 0. CONSTANTS & UTILITIES
+        // ----------------------------------------------------------------------
+        
+        // ** Canvas 環境 App ID **
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-// 模擬當前登入的管理員
-const CURRENT_ADMIN_ID = 'user-001';
-const ADMIN_EMAIL = 'admin@mock.com';
+        // ** Firestore Collection Paths **
+        const PROJECTS_PATH = `artifacts/${appId}/public/data/projects`;
+        const ASSIGNEES_PATH = `artifacts/${appId}/public/data/assignees`;
+        const PRESENCE_PATH = `artifacts/${appId}/public/data/presence`;
+        // ** 用戶個人資料路徑 **
+        const USER_PROFILES_PATH = `artifacts/${appId}/public/data/userProfiles`;
+        
+        // ** 管理員 ID (用於示範權限控制) **
+        const ADMIN_ID = '15152491164772220861'; 
 
-// -----------------------------------------------------------------------------
-// App 組件
-// -----------------------------------------------------------------------------
+        // 專案狀態選項
+        const STATUS_OPTIONS = ['New', 'In Progress', 'Completed'];
+        
+        // 提供的 Firebase 設定作為 fallback (若 Canvas 環境未提供則使用此配置)
+        const defaultFirebaseConfig = {
+            apiKey: "AIzaSyCMiLg3coEoLeVtLmfEK_zlAHsHZ-yZfP0",
+            authDomain: "project-407d1.firebaseapp.com",
+            projectId: "project-407d1",
+            storageBucket: "project-407d1.firebaseapp.com",
+            messagingSenderId: "524548363140",
+            appId: "1:524548363140:web:7b7dedc2a70faf5790c3d1",
+            measurementId: "G-QXYBX3MFXE"
+        };
+        
+        // 優先使用 Canvas 環境提供的設定 (__firebase_config)，否則使用預設配置
+        const firebaseConfig = typeof __firebase_config !== 'undefined' 
+            ? JSON.parse(__firebase_config) 
+            : defaultFirebaseConfig;
 
-const App = () => {
-  const [users, setUsers] = useState(MOCK_DB.users);
-  const [projects, setProjects] = useState(MOCK_DB.projects);
-  const [activeTab, setActiveTab] = useState('userVerification');
-  const [message, setMessage] = useState(null); // { type: 'success' | 'error', text: '...' }
+        let app;
+        let db;
+        let authInstance;
+        
+        /**
+         * 初始化 Firebase 服務並執行登入。
+         */
+        const initFirebase = async () => {
+            try {
+                if (!app) {
+                    // 初始化 Firebase 應用程式
+                    app = firebase.initializeApp(firebaseConfig);
+                    authInstance = firebase.auth(app);
+                    db = firebase.firestore(app);
+                }
+                
+                // 處理 Canvas Custom Token 或匿名登入
+                const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                let userCredential;
 
-  const showMessage = (type, text) => {
-    setMessage({ type, text });
-    setTimeout(() => setMessage(null), 4000); // 4秒後清除訊息
-  };
+                console.log(`[Init] Firebase Init: Attempting sign-in (Token provided: ${!!token})`);
+                
+                if (token) {
+                    userCredential = await authInstance.signInWithCustomToken(token);
+                } else {
+                    userCredential = await authInstance.signInAnonymously();
+                }
+                
+                const userId = userCredential.user.uid;
+                console.log(`[Init] Sign-in Success. Resolved User ID: ${userId}`);
+                
+                return { db, authInstance, userId };
+            } catch (error) {
+                console.error("[CRITICAL] Firebase 初始化或登入失敗:", error);
+                return { db: null, authInstance: null, userId: 'ERROR' }; 
+            }
+        };
 
-  // 模擬使用者註冊後，需要驗證信件的介面
-  const UserVerificationSection = () => (
-    <div className="p-6 bg-white rounded-xl shadow-lg border border-gray-100">
-      <h2 className="text-2xl font-bold text-indigo-700 mb-4 flex items-center">
-        <Mail className="w-6 h-6 mr-2" />
-        使用者註冊與郵件驗證 (流程模擬)
-      </h2>
-      <p className="text-gray-600 mb-4">
-        這是針對「使用者註冊後需透過郵件驗證」的功能展示。
-        在真實應用中，註冊流程會自動發送一封驗證信給用戶。
-      </p>
-      <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded-lg">
-        <p className="font-semibold text-blue-800">
-          <CheckCircle className="inline w-5 h-5 mr-2 align-text-bottom" />
-          流程提示：
-        </p>
-        <ul className="mt-2 list-disc list-inside text-blue-700">
-          <li>使用者提交註冊表單。</li>
-          <li>系統向註冊電子郵件發送一個帶有唯一連結的驗證信。</li>
-          <li>使用者點擊連結後，其帳戶狀態 (`isVerified`) 將從 `false` 變為 `true`。</li>
-        </ul>
-      </div>
-      <div className="mt-6 flex items-center space-x-4">
-          <input
-            type="email"
-            defaultValue="new_user@example.com"
-            className="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-            placeholder="輸入模擬註冊電子郵件"
-            readOnly
-          />
-          <button
-            onClick={() => showMessage('success', '模擬：驗證信已發送到 new_user@example.com。請檢查信箱！')}
-            className="px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition duration-150"
-          >
-            模擬註冊 & 發送驗證信
-          </button>
-      </div>
-    </div>
-  );
-
-  // 管理員新增/刪除使用者
-  const UserManagementSection = () => {
-    const [newEmail, setNewEmail] = useState('');
-    const [newName, setNewName] = useState('');
-
-    // 2. 管理員可以自行新增用戶
-    const handleAddUser = (e) => {
-      e.preventDefault();
-      if (!newEmail || !newName) {
-        showMessage('error', '電子郵件和姓名不能為空。');
-        return;
-      }
-      const newUserId = `user-${String(users.length + 1).padStart(3, '0')}`;
-      const newUser = {
-        id: newUserId,
-        email: newEmail,
-        name: newName,
-        isVerified: true, // 管理員新增預設為已驗證
-        role: 'User'
-      };
-      setUsers([...users, newUser]);
-      setNewEmail('');
-      setNewName('');
-      showMessage('success', `成功新增用戶：${newName} (${newEmail})`);
-    };
-
-    // 2. 管理員可以刪除用戶
-    const handleDeleteUser = (userId, userName) => {
-      if (userId === CURRENT_ADMIN_ID) {
-        showMessage('error', '不能刪除當前登入的管理員帳戶！');
-        return;
-      }
-      if (window.confirm(`確定要刪除用戶 ${userName} 嗎？`)) {
-        setUsers(users.filter(user => user.id !== userId));
-        showMessage('success', `已成功刪除用戶：${userName}`);
-      }
-    };
-
-    return (
-      <div className="p-6 bg-white rounded-xl shadow-lg border border-gray-100">
-        <h2 className="text-2xl font-bold text-green-700 mb-4 flex items-center">
-          <Shield className="w-6 h-6 mr-2" />
-          管理員：用戶管理
-        </h2>
-
-        {/* 新增用戶表單 */}
-        <form onSubmit={handleAddUser} className="mb-8 p-4 border border-green-200 rounded-lg bg-green-50">
-          <h3 className="text-xl font-semibold text-green-800 mb-3 flex items-center"><UserPlus className="w-5 h-5 mr-2" /> 新增用戶</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <input
-              type="text"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              className="p-2 border border-gray-300 rounded-lg focus:ring-green-500 focus:border-green-500"
-              placeholder="姓名"
-            />
-            <input
-              type="email"
-              value={newEmail}
-              onChange={(e) => setNewEmail(e.target.value)}
-              className="p-2 border border-gray-300 rounded-lg focus:ring-green-500 focus:border-green-500"
-              placeholder="電子郵件 (Email)"
-            />
-            <button
-              type="submit"
-              className="py-2 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 transition duration-150"
+        // ----------------------------------------------------------------------
+        // 1. ICON COMPONENTS (Reusable SVGs)
+        // ----------------------------------------------------------------------
+        
+        const IconWrapper = ({ children, className = "" }) => (
+            <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                width="24" 
+                height="24" 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2" 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                className={className}
             >
-              新增用戶
-            </button>
-          </div>
-        </form>
+                {children}
+            </svg> 
+        );
 
-        {/* 用戶列表 */}
-        <h3 className="text-xl font-semibold text-gray-700 mb-3">用戶列表 ({users.length} 人)</h3>
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">姓名/角色</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">電子郵件</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">驗證狀態</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {users.map((user) => (
-                <tr key={user.id} className={user.id === CURRENT_ADMIN_ID ? 'bg-yellow-50' : ''}>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">{user.name}</div>
-                    <div className="text-xs text-indigo-500">{user.role} {user.id === CURRENT_ADMIN_ID && '(當前管理員)'}</div>
-                  </td>
-                  <td className="px
+        const Users = (props) => (
+            <IconWrapper {...props}>
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </IconWrapper>
+        );
+        
+        const PlusCircle = (props) => (
+            <IconWrapper {...props}>
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="16" />
+                <line x1="8" y1="12" x2="16" y2="12" />
+            </IconWrapper>
+        );
+
+        const CheckCircle = (props) => (
+            <IconWrapper {...props}>
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                <polyline points="22 4 12 14.01 9 11.01" />
+            </IconWrapper>
+        );
+
+        const XCircle = (props) => (
+            <IconWrapper {...props}>
+                <circle cx="12" cy="12" r="10" />
+                <line x1="15" y1="9" x2="9" y2="15" />
+                <line x1="9" y1="9" x2="15" y2="15" />
+            </IconWrapper>
+        );
+
+        const AlertTriangle = (props) => (
+            <IconWrapper {...props}>
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+            </IconWrapper>
+        );
+
+        const Settings = (props) => (
+            <IconWrapper {...props}>
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.44a2 2 0 0 1-.77 1.58L8.14 7.23a2 2 0 0 0-.25 2.82l.06.07a2 2 0 0 1-.32 2.65L6.1 14.88a2 2 0 0 0-.46 2.05l.39 1.16a2 2 0 0 1-.1 1.74l-.19.46a2 2 0 0 0 1.15 2.63l.36.16a2 2 0 0 1 1.63 0l1.6-.68a2 2 0 0 0 2.22 0l1.6.68a2 2 0 0 1 1.63 0l.36-.16a2 2 0 0 0 1.15-2.63l-.19-.46a2 2 0 0 1-.1-1.74l.39-1.16a2 2 0 0 0-.46-2.05l-1.6-1.66a2 2 0 0 1-.32-2.65l.06-.07a2 2 0 0 0-.25-2.82l-2.6-2.6a2 2 0 0 1-.77-1.58V4a2 2 0 0 0-2-2z" />
+                <circle cx="12" cy="12" r="3" />
+            </IconWrapper>
+        );
+        
+        const UserCheck = (props) => (
+            <IconWrapper {...props}>
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <polyline points="16 11 18 13 22 9" />
+            </IconWrapper>
+        );
+
+
+        // ----------------------------------------------------------------------
+        // 2. REUSABLE UI COMPONENTS
+        // ----------------------------------------------------------------------
+
+        /**
+         * 專案狀態標籤
+         */
+        const StatusBadge = ({ status }) => {
+            let style = 'bg-gray-100 text-gray-800';
+            switch (status) {
+                case 'New': style = 'bg-red-100 text-red-700 ring-red-500/10'; break;
+                case 'In Progress': style = 'bg-primary-50 text-primary-600 ring-primary-500/10'; break;
+                case 'Completed': style = 'bg-green-100 text-green-700 ring-green-500/10'; break;
+                default: style = 'bg-gray-100 text-gray-700 ring-gray-500/10';
+            }
+            return (
+                <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ${style} ring-1 ring-inset`}>
+                    {status}
+                </span>
+            );
+        };
+
+        /**
+         * 通用模態框
+         */
+        const Modal = ({ isOpen, title, children, onClose, className = "max-w-lg" }) => {
+            if (!isOpen) return null;
+            return (
+                <div 
+                    className="fixed inset-0 bg-gray-900 bg-opacity-70 flex items-center justify-center p-4 z-50 transition-opacity duration-300"
+                    onClick={onClose} // 點擊外部區域關閉
+                >
+                    <div 
+                        className={`bg-white rounded-xl shadow-2xl w-full ${className} transition-transform duration-300 transform scale-100`} 
+                        onClick={(e) => e.stopPropagation()} // 阻止事件冒泡到外部區域
+                    >
+                        <div className="p-6">
+                            <div className="flex justify-between items-center border-b border-gray-100 pb-4 mb-4">
+                                <h3 className="text-xl font-bold text-gray-900">{title}</h3>
+                                {onClose && (
+                                    <button 
+                                        onClick={onClose} 
+                                        className="text-gray-400 hover:text-gray-600 transition p-1 rounded-full hover:bg-gray-100"
+                                    >
+                                        <XCircle className="w-6 h-6" />
+                                    </button>
+                                )}
+                            </div>
+                            <div>
+                                {children}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        /**
+         * 模擬郵件通知模態框
+         */
+        const EmailNotificationModal = ({ isOpen, emailContent, onClose }) => {
+            return (
+                <Modal 
+                    isOpen={isOpen} 
+                    title="模擬郵件通知" 
+                    onClose={onClose}
+                >
+                    <p className="text-sm text-gray-600 mb-4">這封模擬郵件將會發送給新的處理人以進行通知。</p>
+                    {emailContent && (
+                        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                            <p className="text-sm font-semibold mb-2 text-gray-800">收件人: <span className="font-normal text-gray-600">{emailContent.to}</span></p>
+                            <p className="text-sm font-semibold mb-3 text-gray-800">主旨: <span className="font-normal text-gray-600">{emailContent.subject}</span></p>
+                            <div className="border-t pt-3">
+                                <h4 className="text-xs font-medium text-gray-500 uppercase mb-2">郵件內容:</h4>
+                                <pre className="whitespace-pre-wrap font-mono text-sm text-gray-700 bg-white p-3 rounded-md border">{emailContent.body}</pre>
+                            </div>
+                        </div>
+                    )}
+                    <div className="flex justify-end mt-4">
+                        <button
+                            onClick={onClose}
+                            className="px-4 py-2 text-sm font-medium text-white bg-primary-500 rounded-lg shadow-md hover:bg-primary-600 transition"
+                        >
+                            關閉
+                        </button>
+                    </div>
+                </Modal>
+            );
+        };
+        
+        /**
+         * ** 更新：用戶註冊模態框 (新增 Email 欄位) **
+         */
+        const UserRegistrationModal = ({ db, userId, onRegistrationSuccess, showNotification, onClose }) => {
+            const [name, setName] = useState('');
+            const [employeeId, setEmployeeId] = useState('');
+            const [email, setEmail] = useState(''); // 新增 Email 狀態
+            const [isSubmitting, setIsSubmitting] = useState(false);
+            
+            const isClosable = !!onClose; 
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                if (!name.trim() || !employeeId.trim() || !email.trim()) return;
+
+                setIsSubmitting(true);
+                
+                try {
+                    // 1. 儲存用戶個人資料 (Profile)
+                    const profileData = {
+                        name: name.trim(),
+                        employeeId: employeeId.trim(),
+                        email: email.trim(), // 儲存 Email
+                        userId: userId,
+                        registeredAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    };
+                    // 使用 userId 作為 Document ID
+                    const profileRef = db.collection(USER_PROFILES_PATH).doc(userId);
+                    await profileRef.set(profileData);
+
+                    // 2. 將用戶同時新增為專案處理人 (Assignee)
+                    const assigneeData = {
+                        id: userId,
+                        name: name.trim(),
+                        employeeId: employeeId.trim(), // 也存一份員工編號在 assignee
+                        email: email.trim(), // 使用註冊的 Email
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    };
+                    const assigneeRef = db.collection(ASSIGNEES_PATH).doc(userId);
+                    await assigneeRef.set(assigneeData);
+
+
+                    showNotification('success', `註冊成功！歡迎 ${name.trim()} (${email.trim()})。您現在可以新增專案了。`);
+                    onRegistrationSuccess(profileData); // 更新 App 狀態
+                } catch (error) {
+                    console.error("用戶註冊失敗:", error);
+                    showNotification('error', '用戶註冊失敗。請檢查 Console 獲取詳細資訊。');
+                } finally {
+                    setIsSubmitting(false);
+                }
+            };
+            
+            return (
+                <Modal 
+                    isOpen={true} 
+                    title="👋 首次登入：請先完成註冊" 
+                    onClose={isClosable ? onClose : null} 
+                    className="max-w-md"
+                >
+                    <form onSubmit={handleSubmit}>
+                        <div className="space-y-4">
+                            <p className="text-sm text-gray-600 bg-yellow-50 p-3 rounded-lg border border-yellow-200">
+                                為了追蹤專案、指派處理人並發送通知，請提供您的基本資訊。
+                            </p>
+                            
+                            {/* 姓名 (Name) */}
+                            <div>
+                                <label htmlFor="user-name" className="block text-sm font-semibold text-gray-700 mb-1">您的姓名</label>
+                                <input
+                                    id="user-name"
+                                    type="text"
+                                    value={name}
+                                    onChange={(e) => setName(e.target.value)}
+                                    placeholder="例如：陳大明"
+                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-500 focus:border-primary-500 transition shadow-sm"
+                                    required
+                                    disabled={isSubmitting}
+                                />
+                            </div>
+
+                            {/* 員工編號 (Employee ID) */}
+                            <div>
+                                <label htmlFor="employee-id" className="block text-sm font-semibold text-gray-700 mb-1">員工編號</label>
+                                <input
+                                    id="employee-id"
+                                    type="text"
+                                    value={employeeId}
+                                    onChange={(e) => setEmployeeId(e.target.value)}
+                                    placeholder="例如：E12345"
+                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-500 focus:border-primary-500 transition shadow-sm"
+                                    required
+                                    disabled={isSubmitting}
+                                />
+                            </div>
+
+                            {/* ** Email 欄位 ** */}
+                            <div>
+                                <label htmlFor="user-email" className="block text-sm font-semibold text-gray-700 mb-1">Email (用於指派通知)</label>
+                                <input
+                                    id="user-email"
+                                    type="email"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    placeholder="例如：da-ming@company.com"
+                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-500 focus:border-primary-500 transition shadow-sm"
+                                    required
+                                    disabled={isSubmitting}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end space-x-3 mt-6">
+                            {isClosable && (
+                                <button 
+                                    type="button" 
+                                    onClick={onClose} 
+                                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition"
+                                    disabled={isSubmitting}
+                                >
+                                    稍後註冊
+                                </button>
+                            )}
+                            <button 
+                                type="submit" 
+                                className="px-4 py-2 text-sm font-medium text-white bg-primary-500 rounded-lg shadow-md hover:bg-primary-600 transition disabled:bg-primary-400"
+                                disabled={isSubmitting || !name.trim() || !employeeId.trim() || !email.trim()}
+                            >
+                                {isSubmitting ? '註冊中...' : '確認註冊並開始使用'}
+                            </button>
+                        </div>
+                    </form>
+                </Modal>
+            );
+        };
+        
+        /**
+         * 新增專案表單 (更新 Assignee 顯示格式)
+         */
+        const AddProjectForm = ({ db, assignees, onClose, showNotification }) => {
+            const [name, setName] = useState('');
+            const [status, setStatus] = useState(STATUS_OPTIONS[0]); // Default to 'New'
+            const [assigneeId, setAssigneeId] = useState(''); // Allow unassigned
+            const [isSubmitting, setIsSubmitting] = useState(false);
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                if (!name.trim()) return;
+
+                setIsSubmitting(true);
+                
+                try {
+                    const newProject = {
+                        name: name.trim(),
+                        status: status,
+                        assigneeId: assigneeId || null, 
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    };
+                    
+                    await db.collection(PROJECTS_PATH).add(newProject);
+
+                    showNotification('success', `成功新增專案: [${name.trim()}]。`);
+                    onClose();
+                } catch (error) {
+                    console.error("新增專案失敗:", error);
+                    showNotification('error', '新增專案失敗。請檢查 Console 獲取詳細資訊。');
+                } finally {
+                    setIsSubmitting(false);
+                }
+            };
+            
+            return (
+                <form onSubmit={handleSubmit}>
+                    <div className="space-y-4">
+                        {/* Project Name */}
+                        <div>
+                            <label htmlFor="project-name" className="block text-sm font-semibold text-gray-700 mb-1">專案名稱</label>
+                            <input
+                                id="project-name"
+                                type="text"
+                                value={name}
+                                onChange={(e) => setName(e.target.value)}
+                                placeholder="輸入新專案名稱"
+                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-500 focus:border-primary-500 transition shadow-sm"
+                                required
+                                disabled={isSubmitting}
+                            />
+                        </div>
+
+                        {/* Status */}
+                        <div>
+                            <label htmlFor="project-status" className="block text-sm font-semibold text-gray-700 mb-1">專案狀態</label>
+                            <select
+                                id="project-status"
+                                value={status}
+                                onChange={(e) => setStatus(e.target.value)}
+                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-500 focus:border-primary-500 transition shadow-sm"
+                                disabled={isSubmitting}
+                            >
+                                {STATUS_OPTIONS.map((s) => (
+                                    <option key={s} value={s}>{s}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {/* Assignee */}
+                        <div>
+                            <label htmlFor="project-assignee" className="block text-sm font-semibold text-gray-700 mb-1">指派處理人 (選填)</label>
+                            <select
+                                id="project-assignee"
+                                value={assigneeId}
+                                onChange={(e) => setAssigneeId(e.target.value)}
+                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-500 focus:border-primary-500 transition shadow-sm"
+                                disabled={isSubmitting}
+                            >
+                                <option value="">-- 未指派 (可稍後指派) --</option>
+                                {assignees.map((a) => (
+                                    <option key={a.id} value={a.id}>
+                                        {/* 顯示 姓名 (員工編號) - Email */}
+                                        {a.name} ({a.employeeId || 'N/A'}) - {a.email || '無 Email'}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="flex justify-end space-x-3 mt-6">
+                        <button 
+                            type="button" 
+                            onClick={onClose} 
+                            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition"
+                            disabled={isSubmitting}
+                        >
+                            取消
+                        </button>
+                        <button 
+                            type="submit" 
+                            className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg shadow-md hover:bg-green-700 transition disabled:bg-green-400"
+                            disabled={isSubmitting || !name.trim()}
+                        >
+                            {isSubmitting ? '新增中...' : '確認新增專案'}
+                        </button>
+                    </div>
+                </form>
+            );
+        };
+        
+        /**
+         * 管理員：用戶管理模態框 (邏輯微調 Assignee 資訊)
+         */
+        const AdminManagementModal = ({ db, onlineUsers, assignees, onClose, showNotification }) => {
+            const [isAdding, setIsAdding] = useState(false);
+
+            // 處理將用戶新增為 Assignee
+            const handleAddAsAssignee = async (user) => {
+                // 由於匿名用戶未註冊，我們無法獲得真實的 name/employeeId/email
+                // 此處為了讓功能運作，仍然使用簡化資訊，但鼓勵用戶走註冊流程
+                const newAssigneeData = {
+                    id: user.id,
+                    name: `Anon User ${user.id.substring(0, 8)}`, // 簡化名稱
+                    employeeId: 'N/A', 
+                    email: `anon.${user.id}@system.com`,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                };
+
+                setIsAdding(true);
+                try {
+                    const docRef = db.collection(ASSIGNEES_PATH).doc(user.id);
+                    await docRef.set(newAssigneeData, { merge: true });
+
+                    showNotification('success', `成功將用戶 [${newAssigneeData.name}] 新增為處理人。`);
+                } catch (error) {
+                    console.error("新增處理人失敗:", error);
+                    showNotification('error', `新增處理人失敗: ${error.message}`);
+                } finally {
+                    setIsAdding(false);
+                }
+            };
+
+            // 當前已是 Assignee 的 ID 列表
+            const currentAssigneeIds = useMemo(() => new Set(assignees.map(a => a.id)), [assignees]);
+
+            return (
+                <Modal 
+                    isOpen={true} 
+                    title={`在線用戶與處理人管理 (${onlineUsers.length} 人在線)`}
+                    onClose={onClose}
+                    className="max-w-3xl"
+                >
+                    <div className="space-y-6">
+                        {/* 在線用戶列表 */}
+                        <div className="border border-gray-200 rounded-xl p-4 bg-gray-50">
+                            <h4 className="text-lg font-semibold text-gray-800 mb-3 flex items-center">
+                                <Users className="w-5 h-5 mr-2 text-teal-600" /> 當前在線用戶 ({onlineUsers.length})
+                            </h4>
+                            <div className="max-h-60 overflow-y-auto pr-2">
+                                {onlineUsers.length === 0 ? (
+                                    <p className="text-gray-500 italic">目前沒有用戶在線（或他們太久沒刷新頁面）。</p>
+                                ) : (
+                                    <ul className="divide-y divide-gray-200">
+                                        {onlineUsers.map((user) => (
+                                            <li key={user.id} className="flex justify-between items-center py-2 text-sm">
+                                                <div className="flex-1 mr-4">
+                                                    <p className="font-mono text-gray-800 break-all">{user.id}</p>
+                                                    <p className="text-xs text-gray-500">最後活躍: {user.lastSeen.toLocaleTimeString()}</p>
+                                                </div>
+                                                
+                                                {currentAssigneeIds.has(user.id) ? (
+                                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                                        ✅ 已是處理人
+                                                    </span>
+                                                ) : (
+                                                    <button
+                                                        onClick={() => handleAddAsAssignee(user)}
+                                                        className="px-3 py-1 text-xs font-medium text-white bg-teal-500 rounded-lg shadow-sm hover:bg-teal-600 transition disabled:opacity-50"
+                                                        disabled={isAdding}
+                                                    >
+                                                        {isAdding ? '新增中...' : '新增為處理人'}
+                                                    </button>
+                                                )}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* 現有處理人列表 (簡潔展示) */}
+                        <div className="border border-gray-200 rounded-xl p-4 bg-white">
+                            <h4 className="text-lg font-semibold text-gray-800 mb-3 flex items-center">
+                                <Users className="w-5 h-5 mr-2 text-primary-600" /> 現有專案處理人 ({assignees.length})
+                            </h4>
+                            <div className="max-h-40 overflow-y-auto pr-2">
+                                {assignees.length === 0 ? (
+                                    <p className="text-gray-500 italic">目前沒有專案處理人。</p>
+                                ) : (
+                                    <ul className="grid grid-cols-2 gap-2 text-sm">
+                                        {assignees.map((a) => (
+                                            <li key={a.id} className="p-2 bg-indigo-50 rounded-lg truncate" title={a.email}>
+                                                <span className="font-medium text-indigo-800">{a.name} ({a.employeeId || 'N/A'})</span>
+                                                <span className="text-xs text-indigo-600 ml-2">[{a.email || '無 Email'}]</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end mt-4">
+                            <button
+                                onClick={onClose}
+                                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition"
+                            >
+                                關閉管理面板
+                            </button>
+                        </div>
+                    </div>
+                </Modal>
+            );
+        };
+
+
+        // ----------------------------------------------------------------------
+        // 3. MAIN APPLICATION COMPONENT
+        // ----------------------------------------------------------------------
+
+        const App = () => {
+            const [db, setDb] = useState(null);
+            const [auth, setAuth] = useState(null);
+            const [projects, setProjects] = useState([]);
+            const [assignees, setAssignees] = useState([]);
+            const [presenceData, setPresenceData] = useState([]); 
+            const [userId, setUserId] = useState(null); 
+            // ** 用戶資料狀態 **
+            const [userProfile, setUserProfile] = useState(null);
+            const [isRegistered, setIsRegistered] = useState(false);
+            
+            const [loading, setLoading] = useState(true); 
+            const [isDbConnected, setIsDbConnected] = useState(true);
+
+            // 通知和模態框狀態
+            const [notification, setNotification] = useState({ visible: false, type: 'success', message: '' });
+            const [emailModalConfig, setEmailModalConfig] = useState({});
+            const [assigneeModalConfig, setAssigneeModalConfig] = useState({});
+            const [addProjectModalOpen, setAddProjectModalOpen] = useState(false); 
+            const [adminManagementModalOpen, setAdminManagementModalOpen] = useState(false);
+            // ** 註冊模態框狀態 **
+            const [registrationModalOpen, setRegistrationModalOpen] = useState(false);
+
+
+            // 顯示通知的 useCallback
+            const showNotification = useCallback((type, message) => {
+                setNotification({ visible: true, type, message });
+                setTimeout(() => {
+                    setNotification({ visible: false, type, message: '' });
+                }, 4000);
+            }, []);
+
+            // 開啟郵件通知模態框
+            const openEmailModal = (to, subject, body) => {
+                setEmailModalConfig({
+                    isOpen: true,
+                    emailContent: { to, subject, body }
+                });
+            };
+            
+            // 處理註冊成功的回調函數
+            const handleRegistrationSuccess = useCallback((profile) => {
+                setUserProfile(profile);
+                setIsRegistered(true);
+                setRegistrationModalOpen(false);
+                setAddProjectModalOpen(true); // 註冊成功後自動開啟新增專案表單
+            }, []);
+
+
+            // 1. Firebase 初始化與登入
+            useEffect(() => {
+                const runInitialization = async () => {
+                    try {
+                        const { db: initializedDb, auth: initializedAuth, userId: authenticatedUserId } = await initFirebase();
+
+                        if (authenticatedUserId === 'ERROR' || !initializedDb) {
+                             setUserId('ERROR');
+                             setIsDbConnected(false);
+                        } else {
+                            setDb(initializedDb);
+                            setAuth(initializedAuth);
+                            setUserId(authenticatedUserId); 
+                            setIsDbConnected(true);
+                            
+                            // 獲取用戶資料
+                            const profileRef = initializedDb.collection(USER_PROFILES_PATH).doc(authenticatedUserId);
+                            const profileSnap = await profileRef.get();
+                            
+                            if (profileSnap.exists) {
+                                const profile = profileSnap.data();
+                                setUserProfile(profile);
+                                setIsRegistered(true);
+                                console.log(`[Auth] User ${profile.name} is registered.`);
+                            } else {
+                                setIsRegistered(false);
+                                console.log(`[Auth] User ${authenticatedUserId} is NOT registered.`);
+                            }
+                        }
+                    } catch (error) {
+                        console.error("Initialization failed outside try/catch:", error);
+                        setUserId('ERROR');
+                        setIsDbConnected(false);
+                    } finally {
+                        setLoading(false); 
+                    }
+                };
+
+                runInitialization();
+            }, []); 
+            
+            // 2. 監聽資料庫 (Projects & Assignees)
+            useEffect(() => {
+                if (!db || userId === null || userId === 'ERROR') return; 
+
+                console.log("Starting Firestore Listeners...");
+
+                // 專案資料監聽
+                const unsubscribeProjects = db.collection(PROJECTS_PATH).onSnapshot((snapshot) => {
+                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setProjects(data);
+                    setIsDbConnected(true);
+                }, (error) => {
+                    console.error("Error fetching projects: ", error);
+                    setIsDbConnected(false);
+                    showNotification('error', '無法載入專案資料，請檢查 Firebase 連線或權限。');
+                });
+                
+                // 處理人資料監聽
+                const unsubscribeAssignees = db.collection(ASSIGNEES_PATH).onSnapshot((snapshot) => {
+                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setAssignees(data);
+                }, (error) => {
+                    console.error("Error fetching assignees: ", error);
+                });
+
+                return () => {
+                    unsubscribeProjects();
+                    unsubscribeAssignees();
+                };
+            }, [db, userId, showNotification]);
+            
+            // ** 3. 實作在線狀態追蹤系統 (Presence System) **
+            useEffect(() => {
+                if (!db || userId === null || userId === 'ERROR') return;
+
+                const presenceRef = db.collection(PRESENCE_PATH).doc(userId);
+                
+                // 更新在線時間戳記
+                const updatePresence = () => {
+                    presenceRef.set({
+                        userId: userId,
+                        // 儲存最後活躍時間
+                        lastSeen: firebase.firestore.FieldValue.serverTimestamp(),
+                    }, { merge: true }).catch(err => console.error("Failed to update presence:", err));
+                };
+
+                updatePresence(); // 初始更新
+                
+                // 定期更新（每 30 秒）
+                const intervalId = setInterval(updatePresence, 30000); 
+
+                // 監聽 Presence 資料
+                const unsubscribePresence = db.collection(PRESENCE_PATH).onSnapshot((snapshot) => {
+                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setPresenceData(data);
+                }, (error) => {
+                    console.error("Error fetching presence data: ", error);
+                });
+
+                return () => {
+                    clearInterval(intervalId); // 清除定時器
+                    unsubscribePresence(); // 停止監聽
+                };
+            }, [db, userId]); 
+            
+            // 獲取處理人姓名的 Helper (更新為顯示 Email)
+            const getAssigneeDisplayInfo = useCallback((assigneeId) => {
+                const assignee = assignees.find(a => a.id === assigneeId);
+                
+                if (assignee) {
+                    const name = assignee.name || '未知姓名';
+                    const email = assignee.email || '無 Email';
+                    return {
+                        name: name,
+                        email: email,
+                        displayName: `${name} (${assignee.employeeId || 'N/A'})`
+                    };
+                }
+                
+                return {
+                    name: '未指派',
+                    email: 'N/A',
+                    displayName: '未指派'
+                };
+            }, [assignees]);
+            
+            // 檢查是否為管理員
+            const canManage = userId === ADMIN_ID;
+            
+            // 檢查是否可以新增專案 (已連線且已註冊)
+            const canAddProject = isDbConnected && isRegistered && !loading;
+
+            // 處理點擊「新增專案」按鈕
+            const handleAddProjectClick = () => {
+                if (!isRegistered) {
+                    setRegistrationModalOpen(true);
+                } else {
+                    setAddProjectModalOpen(true);
+                }
+            };
+
+
+            // ** 計算當前在線用戶 **
+            const onlineUsers = useMemo(() => {
+                // 定義在線閾值：過去 60 秒內活躍的用戶
+                const threshold = Date.now() - 60000; 
+                return presenceData
+                    .filter(p => p.lastSeen && p.lastSeen.toDate().getTime() > threshold)
+                    .map(p => ({
+                        id: p.userId || p.id,
+                        lastSeen: p.lastSeen.toDate(),
+                    }))
+                    .filter(user => user.id !== ADMIN_ID); // <-- 排除管理員
+            }, [presenceData]);
+
+            // ** 處理專案狀態更新邏輯 **
+            const handleUpdateStatus = async (projectId, newStatus, projectName) => {
+                if (!db || !projectId) return;
+
+                try {
+                    const projectRef = db.collection(PROJECTS_PATH).doc(projectId);
+                    await projectRef.update({
+                        status: newStatus,
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    
+                    showNotification('success', `專案 [${projectName}] 狀態已更新為 [${newStatus}]。`);
+
+                } catch (error) {
+                    console.error("更新專案狀態失敗:", error);
+                    showNotification('error', `更新專案狀態失敗: ${error.message}`);
+                }
+            };
+
+            // ** 處理更換處理人邏輯 (更新模擬 Email 通知) **
+            const handleUpdateAssignee = async (projectId, newAssigneeId, projectName) => {
+                if (!db || !projectId) return;
+
+                const currentAssigneeInfo = getAssigneeDisplayInfo(assigneeModalConfig.currentAssigneeId);
+                const newAssigneeInfo = getAssigneeDisplayInfo(newAssigneeId);
+                
+                // 檢查是否沒有變化
+                if (newAssigneeId === assigneeModalConfig.currentAssigneeId) {
+                    showNotification('warning', '處理人沒有改變。');
+                    setAssigneeModalConfig({ isOpen: false });
+                    return;
+                }
+
+                try {
+                    const projectRef = db.collection(PROJECTS_PATH).doc(projectId);
+                    await projectRef.update({
+                        assigneeId: newAssigneeId,
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    
+                    showNotification('success', `專案 [${projectName}] 成功轉交給 ${newAssigneeInfo.displayName}。`);
+                    
+                    // 模擬發送通知
+                    if (newAssigneeId && newAssigneeInfo.email && newAssigneeInfo.email !== 'N/A') {
+                        const emailBody = `
+您好 ${newAssigneeInfo.name},
+
+您已被指派為新的專案處理人。
+專案名稱: ${projectName}
+前任處理人: ${currentAssigneeInfo.name}
+請檢查儀表板以開始工作。
+`;
+                        // 使用新的處理人 Email
+                        openEmailModal(newAssigneeInfo.email, `[Action Required] 新專案指派: ${projectName}`, emailBody.trim());
+                    }
+
+                } catch (error) {
+                    console.error("更新處理人失敗:", error);
+                    showNotification('error', `更新處理人失敗: ${error.message}`);
+                } finally {
+                    setAssigneeModalConfig({ isOpen: false });
+                }
+            };
+            
+            // 更換處理人表單 (用於 Modal)
+            const AssigneeChangeForm = () => {
+                const [selectedAssigneeId, setSelectedAssigneeId] = useState(assigneeModalConfig.currentAssigneeId || '');
+                const currentAssigneeInfo = getAssigneeDisplayInfo(assigneeModalConfig.currentAssigneeId);
+
+                const onSubmit = (e) => {
+                    e.preventDefault();
+                    handleUpdateAssignee(
+                        assigneeModalConfig.projectId,
+                        selectedAssigneeId,
+                        assigneeModalConfig.projectName
+                    );
+                };
+
+                return (
+                    <form onSubmit={onSubmit}>
+                        <p className="text-sm text-gray-700 mb-4">
+                            您正在為專案 **{assigneeModalConfig.projectName}** 轉交處理人。
+                            當前處理人: **{currentAssigneeInfo.displayName}**
+                        </p>
+                        
+                        <label htmlFor="new-assignee" className="block text-sm font-semibold text-gray-700 mb-1">選擇新的處理人</label>
+                        <select
+                            id="new-assignee"
+                            value={selectedAssigneeId}
+                            onChange={(e) => setSelectedAssigneeId(e.target.value)}
+                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-500 focus:border-primary-500 transition shadow-sm"
+                        >
+                            <option value="">-- 未指派 --</option>
+                            {assignees.map((a) => (
+                                <option key={a.id} value={a.id}>
+                                    {/* 顯示 姓名 (員工編號) - Email */}
+                                    {a.name} ({a.employeeId || 'N/A'}) - {a.email || '無 Email'}
+                                </option>
+                            ))}
+                        </select>
+                        
+                        <div className="flex justify-end space-x-3 mt-6">
+                            <button 
+                                type="button" 
+                                onClick={() => setAssigneeModalConfig({ isOpen: false })} 
+                                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition"
+                            >
+                                取消
+                            </button>
+                            <button 
+                                type="submit" 
+                                className="px-4 py-2 text-sm font-medium text-white bg-primary-500 rounded-lg shadow-md hover:bg-primary-600 transition"
+                                disabled={selectedAssigneeId === assigneeModalConfig.currentAssigneeId}
+                            >
+                                確認轉交
+                            </button>
+                        </div>
+                    </form>
+                );
+            };
+
+            // 主要儀表板內容
+            const DashboardContent = useMemo(() => {
+                if (loading) {
+                    return (
+                        <div className="text-center py-20 text-gray-500">
+                            <svg className="animate-spin h-8 w-8 text-primary-500 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <p>正在連線至儀表板資料...</p>
+                        </div>
+                    );
+                }
+                
+                if (userId === 'ERROR') {
+                    return (
+                        <div className="text-center py-20 bg-red-100 rounded-xl border border-red-300 text-red-700">
+                            <AlertTriangle className="w-10 h-10 mx-auto mb-4" />
+                            <h2 className="text-xl font-bold">連線錯誤</h2>
+                            <p className="mt-2">無法連線到 Firebase 資料庫。請檢查您的連線狀態或應用程式配置。</p>
+                        </div>
+                    );
+                }
+                
+                if (!userId) {
+                    return <div className="text-center py-20 text-gray-500">正在等待用戶身份驗證...</div>;
+                }
+
+
+                return (
+                    <div className="bg-white shadow-xl rounded-xl mt-8 overflow-hidden border border-gray-100">
+                        <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50">
+                                <tr>
+                                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider w-1/4">專案名稱</th>
+                                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider w-1/4">狀態</th>
+                                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider w-1/4">處理人</th>
+                                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider w-1/4">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-100">
+                                {projects.length === 0 ? (
+                                    <tr>
+                                        <td colSpan="4" className="px-6 py-10 whitespace-nowrap text-lg text-gray-400 text-center">
+                                            🎉 恭喜，目前沒有待處理的專案！
+                                            <p className="text-sm mt-2">點擊上方 "新增專案" 按鈕來開始一個新任務。</p>
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    projects.map((project) => {
+                                        // 檢查是否有權限更改狀態: 管理員 OR 專案處理人
+                                        const canChangeStatus = canManage || (userId === project.assigneeId);
+                                        const assigneeInfo = getAssigneeDisplayInfo(project.assigneeId);
+
+                                        return (
+                                            <tr key={project.id} className="hover:bg-gray-50 transition duration-150">
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{project.name}</td>
+                                                
+                                                {/* ** 專案狀態欄位 (可編輯/只讀) ** */}
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    {canChangeStatus ? (
+                                                        <select
+                                                            value={project.status}
+                                                            onChange={(e) => handleUpdateStatus(project.id, e.target.value, project.name)}
+                                                            className="py-1 px-2 border border-gray-300 rounded-lg text-sm shadow-sm focus:ring-primary-500 focus:border-primary-500 transition disabled:opacity-50"
+                                                            aria-label={`Change status for ${project.name}`}
+                                                            disabled={!db}
+                                                        >
+                                                            {STATUS_OPTIONS.map((s) => (
+                                                                <option key={s} value={s}>{s}</option>
+                                                            ))}
+                                                        </select>
+                                                    ) : (
+                                                        <StatusBadge status={project.status} />
+                                                    )}
+                                                </td>
+                                                
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600" title={assigneeInfo.email}>{assigneeInfo.displayName}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                                    <button
+                                                        onClick={() => setAssigneeModalConfig({
+                                                            isOpen: true,
+                                                            projectId: project.id,
+                                                            projectName: project.name,
+                                                            currentAssigneeId: project.assigneeId
+                                                        })}
+                                                        className="inline-flex items-center px-4 py-2 border border-primary-300 rounded-lg shadow-sm text-sm font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition disabled:opacity-50"
+                                                        disabled={!db || !canManage} // 只有管理員可以轉交
+                                                        title={canManage ? "轉交處理人" : "您沒有權限轉交"}
+                                                    >
+                                                        <Users className="w-4 h-4 mr-2" /> 轉交處理人
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                );
+            }, [projects, loading, userId, getAssigneeDisplayInfo, canManage, isDbConnected, handleUpdateStatus]); 
+
+            return (
+                <div className="min-h-screen p-4 sm:p-6 lg:p-8">
+                    <div className="max-w-7xl mx-auto">
+                        {/* Header and Status */}
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-6 border-b border-gray-200">
+                            <h1 className="text-4xl font-extrabold text-gray-900 mb-4 sm:mb-0">
+                                專案運營儀表板
+                            </h1>
+                            <div className="flex items-center space-x-3">
+                                {/* 新增專案按鈕 - 點擊後檢查是否已註冊 */}
+                                {(userId && userId !== 'ERROR' && !loading) && (
+                                    <button 
+                                        onClick={handleAddProjectClick}
+                                        className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-md text-white transition ${canAddProject ? 'bg-green-600 hover:bg-green-700 focus:ring-green-500' : 'bg-yellow-500 hover:bg-yellow-600 focus:ring-yellow-500'}`}
+                                        disabled={!db}
+                                        title={canAddProject ? '新增一個新專案' : '點擊註冊以新增專案'}
+                                    >
+                                        {canAddProject ? (
+                                            <PlusCircle className="w-5 h-5 mr-2" />
+                                        ) : (
+                                            <UserCheck className="w-5 h-5 mr-2" />
+                                        )}
+                                        {canAddProject ? '新增專案' : '註冊後新增'}
+                                    </button>
+                                )}
+                                
+                                {/* ** 管理面板按鈕 ** (僅限管理員) */}
+                                {canManage && (
+                                    <button 
+                                        onClick={() => setAdminManagementModalOpen(true)}
+                                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-md text-white bg-teal-500 hover:bg-teal-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500 transition"
+                                        disabled={!db}
+                                    >
+                                        <Settings className="w-5 h-5 mr-2" /> 管理員面板
+                                    </button>
+                                )}
+                                
+
+                                <div className="flex items-center space-x-3 bg-white p-3 rounded-xl shadow-md">
+                                    {/* 在線用戶計數 */}
+                                    <div className="px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700 flex items-center">
+                                        <Users className="w-3 h-3 mr-1" /> 在線人數: {onlineUsers.length}
+                                    </div>
+                                    {/* 角色狀態 */}
+                                    <div className={`px-3 py-1 rounded-full text-xs font-bold ${canManage ? 'bg-indigo-100 text-indigo-700' : (isRegistered ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700')}`}>
+                                        {canManage ? '👑 管理員' : (isRegistered ? `👤 ${userProfile.name}` : '🚫 未註冊')}
+                                    </div>
+                                    {/* DB 連線狀態 */}
+                                    <div className={`px-3 py-1 rounded-full text-xs font-bold ${isDbConnected ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                        {isDbConnected ? '🟢 DB 連線正常' : '🔴 DB 連線中斷'}
+                                    </div>
+                                    {/* 用戶 ID */}
+                                    <div className="text-xs text-gray-600 truncate">
+                                        用戶 ID: <span className="font-mono text-gray-800">{loading ? '連線中...' : userId}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Notification Banner */}
+                        {notification.visible && (
+                            <div className={`mt-6 p-4 rounded-lg flex items-center shadow-lg ${notification.type === 'success' ? 'bg-green-50 text-green-700 border-l-4 border-green-400' : 'bg-red-50 text-red-700 border-l-4 border-red-400'}`}>
+                                {notification.type === 'success' ? <CheckCircle className="w-5 h-5 mr-3" /> : <XCircle className="w-5 h-5 mr-3" />}
+                                <p className="text-sm font-medium">{notification.message}</p>
+                            </div>
+                        )}
+
+                        {/* Project List */}
+                        {DashboardContent}
+                        
+                        {/* Modals */}
+
+                        {/* 1. 模擬郵件通知模態框 */}
+                        <EmailNotificationModal
+                            isOpen={emailModalConfig.isOpen}
+                            emailContent={emailModalConfig.emailContent}
+                            onClose={() => setEmailModalConfig({ isOpen: false })}
+                        />
+                        
+                        {/* 2. 更換處理人模態框 */}
+                        <Modal
+                            isOpen={assigneeModalConfig.isOpen}
+                            title={`轉交專案: ${assigneeModalConfig.projectName || ''}`}
+                            onClose={() => setAssigneeModalConfig({ isOpen: false })}
+                        >
+                            {db && assigneeModalConfig.isOpen && <AssigneeChangeForm />}
+                        </Modal>
+                        
+                        {/* ** 3. 用戶註冊模態框 ** */}
+                        {db && userId && registrationModalOpen && (
+                            <UserRegistrationModal
+                                db={db}
+                                userId={userId}
+                                onRegistrationSuccess={handleRegistrationSuccess}
+                                showNotification={showNotification}
+                                // 不允許在首次點擊新增專案時關閉，除非明確點擊「稍後註冊」
+                                onClose={() => setRegistrationModalOpen(false)} 
+                            />
+                        )}
+
+
+                        {/* 4. 新增專案模態框 - 只有已註冊的用戶才能看到並使用 */}
+                        <Modal
+                            isOpen={addProjectModalOpen}
+                            title="新增專案" 
+                            onClose={() => setAddProjectModalOpen(false)}
+                        >
+                            {db && isRegistered && (
+                                <AddProjectForm
+                                    db={db}
+                                    assignees={assignees}
+                                    onClose={() => setAddProjectModalOpen(false)}
+                                    showNotification={showNotification}
+                                />
+                            )}
+                        </Modal>
+                        
+                        {/* 5. 管理員面板模態框 (僅限管理員可見) */}
+                        {canManage && db && adminManagementModalOpen && ( 
+                            <AdminManagementModal
+                                db={db}
+                                onlineUsers={onlineUsers}
+                                assignees={assignees}
+                                onClose={() => setAdminManagementModalOpen(false)}
+                                showNotification={showNotification}
+                            />
+                        )}
+
+                    </div>
+                </div>
+            );
+        };
+
+        // 確保 DOM 載入完成後再渲染
+        window.onload = () => {
+            const rootElement = document.getElementById('root');
+            if (rootElement) {
+                const root = ReactDOM.createRoot(rootElement);
+                root.render(<App />);
+            } else {
+                console.error("無法找到 #root 元素");
+            }
+        };
+    </script>
+</body>
+</html>
