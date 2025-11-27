@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>專案儀表板 - 用戶自主註冊與版本號</title>
+    <title>專案儀表板 - 最終圖標與配置修正</title>
     <script src="https://cdn.tailwindcss.com"></script>
     
     <!-- 設定 Tailwind CSS 配置，使用 Inter 字體和標準色調 -->
@@ -25,7 +25,7 @@
         }
     </script>
     
-    <!-- Firebase SDKs (使用兼容版本 9.23.0) -->
+    <!-- Firebase SDKs (v9 兼容版本) -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
@@ -34,9 +34,6 @@
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
-    <!-- Lucide Icons (修正: 使用較新的 UMD 版本，並透過 JS 函式呼叫來生成 SVG) -->
-    <script src="https://unpkg.com/lucide@0.303.0"></script>
 </head>
 <body class="bg-gray-50 min-h-screen">
     <div id="root"></div>
@@ -45,62 +42,69 @@
         // -------------------------------------------------------------------
         // 1. 環境變數設定與版本號
         // -------------------------------------------------------------------
-        const APP_VERSION = '1.1.2'; // 版本號更新
+        const APP_VERSION = '1.1.4';
         
-        // 使用者提供的 Firebase Config (從環境變數載入)
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        
-        // 確保應用程式 ID 和初始認證 Token 仍能獲取
+        // 確保安全地從環境變數載入配置
+        const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
         
-        // 確保 Firebase 的日誌級別被設定為 Debug (用於開發和偵錯)
-        if (typeof firebase !== 'undefined' && firebase.firestore) {
-            firebase.firestore.setLogLevel('debug');
-        }
+        // -------------------------------------------------------------------
+        // 2. 共用組件 (Shared Components) - 徹底移除外部圖標庫依賴
+        // -------------------------------------------------------------------
 
         const { useState, useEffect, useCallback, useMemo } = React;
-        const rootElement = document.getElementById('root');
         
-        // -------------------------------------------------------------------
-        // 2. 共用組件 (Shared Components)
-        // ---------------------------------------------------
-
-        const Icon = ({ name, size = 20, className = "" }) => {
-            const [svgHtml, setSvgHtml] = useState(null);
-
-            useEffect(() => {
-                if (typeof lucide !== 'undefined' && lucide[name]) {
-                    try {
-                        const iconFunc = lucide[name];
-                        if (iconFunc) {
-                            const svgString = iconFunc({ class: className, width: size, height: size }).toString();
-                            setSvgHtml(svgString);
-                        } else {
-                            // Fallback for older versions if needed
-                            const iconSvg = lucide.icons[name].toSvg({ class: className, width: size, height: size });
-                            setSvgHtml(iconSvg);
-                        }
-                    } catch (error) {
-                        console.error(`Error generating SVG for icon ${name}:`, error);
-                        setSvgHtml(null); 
-                    }
-                }
-            }, [name, size, className]);
+        // 內聯 SVG 圖標映射 (徹底修正 TypeError: iconFunc is not a function)
+        const getSvgIcon = (name, size, className) => {
+            const sizePx = `${size}px`;
+            const baseProps = `width="${sizePx}" height="${sizePx}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="${className}"`;
             
-            if (!svgHtml) return null;
-            return <span className={className} dangerouslySetInnerHTML={{ __html: svgHtml }} />;
+            // 使用內聯 SVG 代碼，特別為 Loader 加入旋轉動畫
+            switch (name) {
+                case 'Loader': 
+                    // This is a spinning SVG loader, ensuring no external dependencies
+                    return `<svg ${baseProps}><path d="M21 12a9 9 0 1 1-6.219-8.56"/><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite" /></svg>`;
+                case 'User':
+                    return `<svg ${baseProps}><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`;
+                case 'Calendar':
+                    return `<svg ${baseProps}><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`;
+                case 'X':
+                    return `<svg ${baseProps}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+                case 'Save':
+                    return `<svg ${baseProps}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`;
+                case 'Plus':
+                    return `<svg ${baseProps}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+                case 'PlusCircle':
+                    return `<svg ${baseProps}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>`;
+                case 'UserCircle':
+                    return `<svg ${baseProps}><path d="M18 20a4 4 0 0 0-8 0"/><circle cx="12" cy="10" r="4"/><circle cx="12" cy="12" r="10"/></svg>`;
+                case 'CheckCircle':
+                    return `<svg ${baseProps}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14 9 11"/></svg>`;
+                case 'UserPlus':
+                    return `<svg ${baseProps}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>`;
+                case 'Settings':
+                    return `<svg ${baseProps}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+                default:
+                    return `<svg ${baseProps}><rect width="24" height="24" fill="red"/></svg>`;
+            }
         };
 
-        const LoadingSpinner = ({ message = "載入中，請稍候..." }) => (
+        const Icon = ({ name, size = 20, className = "" }) => {
+            const svgHtml = getSvgIcon(name, size, className);
+            // dangerouslySetInnerHTML is required to render the raw SVG string
+            return <span className={className} dangerouslySetInnerHTML={{ __html: svgHtml }} style={{ width: size, height: size, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} />;
+        };
+
+        const LoadingSpinner = ({ message = "正在初始化 Firebase 與身份驗證..." }) => (
             <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50 p-4">
-                <Icon name="Loader" className="animate-spin text-primary-500 mb-3" size={32} />
+                <Icon name="Loader" className="text-primary-500 mb-3" size={48} />
                 <p className="text-gray-600 font-medium">{message}</p>
             </div>
         );
 
         const Notification = ({ message, type, onClose }) => {
-            const baseClasses = "fixed bottom-5 right-5 p-4 rounded-lg shadow-xl z-50 transform transition-all duration-300 ease-out";
+            const baseClasses = "fixed bottom-5 right-5 p-4 rounded-xl shadow-xl z-50 transform transition-all duration-300 ease-out min-w-[300px]";
             const typeClasses = {
                 success: "bg-green-500 text-white",
                 error: "bg-red-500 text-white",
@@ -134,7 +138,7 @@
                 >
                     <div 
                         className="bg-white rounded-xl shadow-2xl w-full max-w-lg md:max-w-xl max-h-[90vh] overflow-y-auto transform transition-all duration-300 ease-out"
-                        onClick={(e) => e.stopPropagation()} // 防止點擊 Modal 內容時關閉
+                        onClick={(e) => e.stopPropagation()} 
                     >
                         <div className="flex justify-between items-center p-5 border-b border-gray-100">
                             <h3 className="text-xl font-bold text-gray-800">{title}</h3>
@@ -153,27 +157,43 @@
         // -------------------------------------------------------------------
         // 3. 核心鉤子 (Core Hook: useFirebase) - 處理初始化、認證、資料同步
         // -------------------------------------------------------------------
+
+        let app, db, auth;
+        const isFirebaseConfigValid = Object.keys(firebaseConfig).length > 0 && firebaseConfig.apiKey;
+        
+        if (isFirebaseConfigValid) {
+             try {
+                // 初始化 Firebase
+                app = firebase.initializeApp(firebaseConfig, appId);
+                auth = firebase.auth(app);
+                db = firebase.firestore(app);
+                firebase.firestore.setLogLevel('debug');
+                console.log("Firebase initialized.");
+            } catch (e) {
+                console.error("Firebase Initialization Failed:", e);
+                // In case of error, mark config as invalid to trigger mock mode/error screen
+                isFirebaseConfigValid = false; 
+            }
+        } else {
+            console.warn("Firebase Configuration Missing or Invalid. Running in mock mode.");
+        }
         
         const useFirebase = () => {
-            const [db, setDb] = useState(null);
-            const [auth, setAuth] = useState(null);
             const [userId, setUserId] = useState(null);
-            // 新增狀態: 存放當前用戶的資料
             const [currentUserData, setCurrentUserData] = useState(null);
             const [isAuthReady, setIsAuthReady] = useState(false);
             const [projects, setProjects] = useState([]);
-            const [assignees, setAssignees] = useState([]); // All users in the system
-            const [logs, setLogs] = useState([]); // System logs
+            const [assignees, setAssignees] = useState([]); 
+            const [logs, setLogs] = useState([]); 
 
             const getPublicPath = useCallback((collectionName) => 
                 `artifacts/${appId}/public/data/${collectionName}`, [appId]);
 
             const logAction = useCallback(async (action, projectId = null) => {
-                // 修正：從 currentUserData 衍生 userRole
+                if (!db || !userId || !isFirebaseConfigValid) return;
+                
                 const role = currentUserData?.role || 'guest';
-                if (!db || !userId || role === 'guest') return; 
                 try {
-                    // 使用 compat API 的 collection 和 add 方法
                     await db.collection(getPublicPath('systemLogs')).add({
                         timestamp: firebase.firestore.FieldValue.serverTimestamp(),
                         userId: userId,
@@ -185,130 +205,104 @@
                 } catch (e) {
                     console.error("Failed to log action:", e);
                 }
-            }, [db, userId, currentUserData, assignees, getPublicPath]);
+            }, [userId, currentUserData, assignees, getPublicPath, isFirebaseConfigValid]);
             
             useEffect(() => {
-                if (!firebaseConfig || !firebaseConfig.apiKey) {
-                    console.error("Firebase Configuration Missing or Invalid. Please ensure __firebase_config is correctly provided.");
+                if (!isFirebaseConfigValid) {
                     setIsAuthReady(true);
-                    return;
+                    return; // Mock mode
                 }
                 
                 let unsubscribeAuth = () => {};
                 let unsubscribeUsers = () => {};
                 let unsubscribeProjects = () => {};
                 let unsubscribeLogs = () => {};
-                let unsubscribeCurrentUser = () => {}; // 為了清理當前用戶的監聽器
-
+                let unsubscribeCurrentUser = () => {}; 
                 
-                const initFirebase = async () => {
+                const initAuth = async () => {
+                    // --- 認證流程 ---
                     try {
-                        console.log("1. Starting Firebase initialization...");
-                        
-                        const app = firebase.initializeApp(firebaseConfig);
-                        const authInstance = app.auth();
-                        const dbInstance = app.firestore();
-
-                        setAuth(authInstance);
-                        setDb(dbInstance);
-
-                        // --- 認證流程 ---
-                        try {
-                            if (authInstance.currentUser) {
-                                console.log("User already signed in:", authInstance.currentUser.uid);
-                            } else if (initialAuthToken) {
-                                console.log("Attempting sign-in with Custom Token...");
-                                await authInstance.signInWithCustomToken(initialAuthToken);
-                            } else {
-                                console.log("Attempting anonymous sign-in...");
-                                await authInstance.signInAnonymously();
-                            }
-                        } catch (signError) {
-                            console.error("Firebase 認證失敗 (Auth Sign-in Failed) - 詳細錯誤:", signError.code, signError.message);
-                            console.error("請檢查您的 firebaseConfig 是否正確，並確認 Firebase Auth 服務已啟用。");
+                        if (auth.currentUser) {
+                            console.log("User already signed in:", auth.currentUser.uid);
+                        } else if (initialAuthToken) {
+                            await auth.signInWithCustomToken(initialAuthToken);
+                        } else {
+                            await auth.signInAnonymously();
                         }
-
-
-                        // --- 狀態變更監聽器 ---
-                        unsubscribeAuth = authInstance.onAuthStateChanged(async (user) => {
-                            if (user) {
-                                const currentUserId = user.uid;
-                                setUserId(currentUserId);
-                                console.log("3. Auth state changed. User ID:", currentUserId);
-
-                                // 4. 監聽 Firestore 公開資料 (Users, Projects, Logs)
-                                
-                                // 監聽所有使用者 (Assignees)
-                                unsubscribeUsers = dbInstance.collection(getPublicPath('users')).onSnapshot(snapshot => {
-                                    const usersData = snapshot.docs.map(doc => doc.data());
-                                    setAssignees(usersData);
-                                }, error => {
-                                    console.error("Error fetching users (Assignees):", error);
-                                });
-
-                                // 監聽專案資料 (Public Collection)
-                                unsubscribeProjects = dbInstance.collection(getPublicPath('projects'))
-                                    .orderBy('createdAt', 'desc')
-                                    .onSnapshot(snapshot => {
-                                        const projectsData = snapshot.docs.map(doc => ({
-                                            id: doc.id,
-                                            ...doc.data()
-                                        }));
-                                        setProjects(projectsData);
-                                    }, error => {
-                                        console.error("Error fetching projects:", error);
-                                    });
-
-                                // 監聽系統日誌 (Public Collection)
-                                unsubscribeLogs = dbInstance.collection(getPublicPath('systemLogs'))
-                                    .orderBy('timestamp', 'desc')
-                                    .limit(50) // 只顯示最新的 50 條日誌
-                                    .onSnapshot(snapshot => {
-                                        const logsData = snapshot.docs.map(doc => ({
-                                            id: doc.id,
-                                            ...doc.data()
-                                        }));
-                                        setLogs(logsData);
-                                    }, error => {
-                                        console.error("Error fetching logs:", error);
-                                    });
-
-                                // 5. 設定當前用戶文件監聽器 (解決註冊後無法切換的問題)
-                                const userDocRef = dbInstance.collection(getPublicPath('users')).doc(currentUserId);
-                                unsubscribeCurrentUser = userDocRef.onSnapshot(doc => {
-                                    if (doc.exists) {
-                                        const userData = doc.data();
-                                        setCurrentUserData(userData);
-                                        // 同時更新登入時間
-                                        userDocRef.update({ 
-                                            lastLogin: firebase.firestore.FieldValue.serverTimestamp()
-                                        }).catch(e => console.error("Failed to update last login:", e));
-                                    } else {
-                                        setCurrentUserData(null); // 檔案不存在，視為 'guest'
-                                    }
-                                }, error => {
-                                    console.error("Error fetching current user document:", error);
-                                    setCurrentUserData(null);
-                                });
-                                
-                                setIsAuthReady(true);
-                                console.log("6. Firebase initialization complete.");
-
-                            } else {
-                                console.log("User signed out or failed to authenticate.");
-                                setUserId(null);
-                                setCurrentUserData(null);
-                                setIsAuthReady(true); 
-                            }
-                        });
-
-                    } catch (error) {
-                        console.error("CRITICAL ERROR during Firebase init or auth:", error);
-                        setIsAuthReady(true); 
+                    } catch (signError) {
+                        console.error("Firebase 認證失敗:", signError.code, signError.message);
                     }
                 };
+                
+                initAuth();
 
-                initFirebase();
+                // --- 狀態變更監聽器 ---
+                unsubscribeAuth = auth.onAuthStateChanged(async (user) => {
+                    if (user) {
+                        const currentUserId = user.uid;
+                        setUserId(currentUserId);
+                        console.log("Auth state changed. User ID:", currentUserId);
+
+                        // 監聽所有使用者 (Assignees)
+                        unsubscribeUsers = db.collection(getPublicPath('users')).onSnapshot(snapshot => {
+                            const usersData = snapshot.docs.map(doc => doc.data());
+                            setAssignees(usersData);
+                        }, error => {
+                            console.error("Error fetching users:", error);
+                        });
+
+                        // 監聽專案資料
+                        unsubscribeProjects = db.collection(getPublicPath('projects'))
+                            .orderBy('createdAt', 'desc')
+                            .onSnapshot(snapshot => {
+                                const projectsData = snapshot.docs.map(doc => ({
+                                    id: doc.id,
+                                    ...doc.data()
+                                }));
+                                setProjects(projectsData);
+                            }, error => {
+                                console.error("Error fetching projects:", error);
+                            });
+
+                        // 監聽系統日誌
+                        unsubscribeLogs = db.collection(getPublicPath('systemLogs'))
+                            .orderBy('timestamp', 'desc')
+                            .limit(50) 
+                            .onSnapshot(snapshot => {
+                                const logsData = snapshot.docs.map(doc => ({
+                                    id: doc.id,
+                                    ...doc.data()
+                                }));
+                                setLogs(logsData);
+                            }, error => {
+                                console.error("Error fetching logs:", error);
+                            });
+
+                        // 實時監聽當前用戶文件 (核心修正註冊後無法切換的問題)
+                        const userDocRef = db.collection(getPublicPath('users')).doc(currentUserId);
+                        unsubscribeCurrentUser = userDocRef.onSnapshot(doc => {
+                            if (doc.exists) {
+                                const userData = doc.data();
+                                setCurrentUserData(userData);
+                                userDocRef.update({ 
+                                    lastLogin: firebase.firestore.FieldValue.serverTimestamp()
+                                }).catch(e => console.error("Failed to update last login:", e));
+                            } else {
+                                setCurrentUserData(null); 
+                            }
+                        }, error => {
+                            console.error("Error fetching current user document:", error);
+                            setCurrentUserData(null);
+                        });
+                        
+                        setIsAuthReady(true);
+
+                    } else {
+                        setUserId(null);
+                        setCurrentUserData(null);
+                        setIsAuthReady(true); 
+                    }
+                });
 
                 // 清理函數：組件卸載時移除所有監聽器
                 return () => {
@@ -316,28 +310,28 @@
                     unsubscribeUsers();
                     unsubscribeProjects();
                     unsubscribeLogs();
-                    unsubscribeCurrentUser(); // 新增清理
+                    unsubscribeCurrentUser(); 
                 };
-            }, [appId, initialAuthToken, getPublicPath]); 
+            }, [getPublicPath, isFirebaseConfigValid]); 
 
-            // 實時從 currentUserData 衍生狀態 (修正無法切換的問題)
+            // 實時從 currentUserData 衍生狀態
             const userRole = currentUserData?.role || 'guest';
             const userDept = currentUserData?.department || '未註冊';
             const canManage = userRole === 'admin';
 
             return {
-                db,
-                auth,
+                db: db,
                 userId,
-                userRole, // 衍生值
-                userDept, // 衍生值
-                canManage, // 衍生值
+                userRole, 
+                userDept, 
+                canManage, 
                 isAuthReady,
                 projects,
                 assignees,
                 logs,
                 logAction,
                 getPublicPath,
+                isFirebaseConfigValid
             };
         };
 
@@ -345,17 +339,15 @@
         // 4. 專案看板組件 (Project Dashboard Components)
         // -------------------------------------------------------------------
         
-        // 狀態標籤組件
         const StatusBadge = ({ status }) => {
             const statusMap = {
                 'Pending': 'bg-yellow-100 text-yellow-800',
                 'InProgress': 'bg-blue-100 text-blue-800',
                 'Completed': 'bg-green-100 text-green-800',
                 'OnHold': 'bg-gray-200 text-gray-700',
-                'admin': 'bg-teal-100 text-teal-800', // for admin panel
-                'user': 'bg-indigo-100 text-indigo-800', // for admin panel
-                'guest': 'bg-red-100 text-red-800', // for admin panel
-                '未設定': 'bg-gray-100 text-gray-600',
+                'admin': 'bg-teal-100 text-teal-800',
+                'user': 'bg-indigo-100 text-indigo-800',
+                'guest': 'bg-red-100 text-red-800',
                 '未註冊': 'bg-red-100 text-red-800',
             };
             const textMap = {
@@ -377,7 +369,6 @@
             );
         };
 
-        // 專案卡片組件
         const ProjectCard = ({ project, assignees, onEdit, userId }) => {
             const assignee = assignees.find(a => a.uid === project.assigneeId);
             const isAssigned = project.assigneeId === userId;
@@ -419,9 +410,8 @@
             );
         };
 
-        // 編輯/新增專案模態框 (簡化版)
         const ProjectForm = ({ project, assignees, onSubmit, onClose, canManage }) => {
-            const isEditMode = !!project; // 修正：從 prop 判斷是否為編輯模式
+            const isEditMode = !!project;
             const initialDate = isEditMode && project.dueDate ? project.dueDate : new Date().toISOString().substring(0, 10);
             const [formData, setFormData] = useState(project || { name: '', description: '', status: 'Pending', assigneeId: '', dueDate: initialDate });
 
@@ -457,11 +447,11 @@
 
                     <select name="assigneeId" value={formData.assigneeId} onChange={handleChange}
                         className="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-500 focus:border-primary-500 transition duration-150"
-                        disabled={!canManage && isEditMode} // 編輯模式下，若非管理員，不允許修改指派人
+                        disabled={!canManage && isEditMode}
                     >
                         <option value="">未指派</option>
                         {assignees
-                            .filter(a => a.role !== 'guest') // 只顯示已註冊的用戶
+                            .filter(a => a.role !== 'guest') 
                             .map(a => (
                             <option key={a.uid} value={a.uid}>{a.name} ({a.department || 'N/A'})</option>
                         ))}
@@ -478,7 +468,6 @@
                         <button type="submit"
                             className="px-4 py-2 bg-primary-500 text-white font-semibold rounded-lg shadow-md hover:bg-primary-600 transition-colors">
                             <div className="flex items-center justify-center">
-                                {/* 修正：使用 isEditMode 變數 */}
                                 <Icon name={isEditMode ? 'Save' : 'Plus'} size={18} className="mr-1" />
                                 <span>{isEditMode ? '更新專案' : '新增專案'}</span>
                             </div>
@@ -488,10 +477,9 @@
             );
         };
         
-        // 新增用戶註冊表單組件 (供管理員預先註冊或設定權限)
         const UserRegistrationForm = ({ assignees, getPublicPath, db, showNotification, logAction, onClose }) => {
             const [formData, setFormData] = useState({ name: '', employeeId: '', department: '企劃' });
-            // 根據您的要求設定部門列表，並加入一個 'Admin' 選項用於快速賦予管理員權限
+            const [isLoading, setIsLoading] = useState(false);
             const departments = ['企劃', '設計', '商品', '營業', 'Admin'];
 
             const handleChange = (e) => {
@@ -501,24 +489,26 @@
 
             const handleSubmit = async (e) => {
                 e.preventDefault();
+                if (!db) return showNotification("資料庫未連接。", "error");
+                
                 if (!formData.name || !formData.employeeId) {
                     return showNotification("姓名和員編為必填項。", "error");
                 }
 
+                setIsLoading(true);
+
                 try {
-                    // 1. 檢查員編是否重複
                     const employeeIdExists = assignees.some(a => a.employeeId === formData.employeeId);
                     if (employeeIdExists) {
+                        setIsLoading(false);
                         return showNotification(`員編 ${formData.employeeId} 已存在，請使用其他員編。`, "error");
                     }
                     
-                    // 2. 創建新的用戶 ID (使用隨機 UUID 作為 Firestore Doc ID，以預先註冊)
                     const newUid = crypto.randomUUID();
                     const userRef = db.collection(getPublicPath('users')).doc(newUid);
 
                     const roleToAssign = formData.department === 'Admin' ? 'admin' : 'user';
 
-                    // 3. 寫入資料
                     await userRef.set({
                         uid: newUid,
                         name: formData.name,
@@ -531,12 +521,14 @@
                     logAction(`[Admin] 預先註冊了新用戶: ${formData.name} (${formData.employeeId})`, newUid);
                     showNotification(`用戶 ${formData.name} (角色: ${roleToAssign}) 註冊成功！`, "success");
                     
-                    // 重設表單
                     setFormData({ name: '', employeeId: '', department: '企劃' });
+                    onClose();
                     
                 } catch (e) {
                     console.error("User registration failed:", e);
                     showNotification("用戶註冊失敗，請檢查權限設定或網路連接。", "error");
+                } finally {
+                    setIsLoading(false);
                 }
             };
 
@@ -556,42 +548,32 @@
                     </select>
                     
                     <div className="pt-2">
-                        <p className="text-xs text-gray-500 mb-3">
-                            **說明:** 此操作在系統中創建用戶資料，賦予其 UID 並設定初始權限。
-                        </p>
-                        <button type="submit"
-                            className="w-full px-4 py-3 bg-teal-500 text-white font-semibold rounded-lg shadow-lg hover:bg-teal-600 transition-colors flex items-center justify-center">
-                            <Icon name="UserPlus" size={20} className="mr-2" /> 確定新增用戶
+                        <button type="submit" disabled={isLoading}
+                            className={`w-full px-4 py-3 text-white font-semibold rounded-lg shadow-lg transition-colors flex items-center justify-center ${isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-teal-500 hover:bg-teal-600'}`}>
+                            {isLoading ? <Icon name="Loader" size={20} className="mr-2" /> : <Icon name="UserPlus" size={20} className="mr-2" />}
+                            <span>{isLoading ? '正在處理...' : '確定新增用戶'}</span>
                         </button>
                     </div>
                 </form>
             );
         };
         
-        // 管理員面板模態框 (Admin Management Modal) - 整合註冊功能
         const AdminManagementModal = ({ assignees, logs, db, getPublicPath, logAction, showNotification, onClose }) => {
             const [activeTab, setActiveTab] = useState('users');
 
-            // 角色映射
-            const roleMap = {
-                'admin': '管理員',
-                'user': '一般用戶',
-                'guest': '訪客'
-            };
+            const roleMap = { 'admin': '管理員', 'user': '一般用戶', 'guest': '訪客' };
 
             const LogItem = ({ log }) => (
                 <div className="p-3 border-b border-gray-100 text-sm">
                     <span className="font-semibold text-gray-700">{log.userName}</span> 
                     <span className="text-gray-500"> ({roleMap[log.role] || log.role}) </span>
                     <span className="text-primary-500 ml-1">{log.action}</span>
-                    {log.projectId && <span className="text-xs ml-2 px-2 py-0.5 bg-gray-100 rounded">專案ID: {log.projectId.substring(0, 4)}...</span>}
                     <span className="block text-xs text-gray-400 mt-0.5">
                         {log.timestamp ? new Date(log.timestamp.seconds * 1000).toLocaleDateString('zh-TW', { hour: '2-digit', minute: '2-digit', month: '2-digit', day: '2-digit' }) : 'N/A'}
                     </span>
                 </div>
             );
             
-            // 用戶清單顯示組件
             const UserList = ({ users }) => (
                 <div className="space-y-3 max-h-80 overflow-y-auto">
                     {users.map(user => (
@@ -643,7 +625,7 @@
                             getPublicPath={getPublicPath}
                             showNotification={showNotification}
                             logAction={logAction}
-                            onClose={onClose}
+                            onClose={() => setActiveTab('users')}
                         />
                     )}
 
@@ -656,7 +638,6 @@
             );
         };
         
-        // 新增：用戶自主註冊表單組件
         const SelfRegistrationForm = ({ userId, db, getPublicPath, assignees, showNotification }) => {
             const [formData, setFormData] = useState({ name: '', employeeId: '', department: '企劃' });
             const [isLoading, setIsLoading] = useState(false);
@@ -669,6 +650,8 @@
 
             const handleSubmit = async (e) => {
                 e.preventDefault();
+                if (!db) return showNotification("資料庫未連接。", "error");
+                
                 if (!formData.name || !formData.employeeId) {
                     return showNotification("姓名和員編為必填項。", "error");
                 }
@@ -676,28 +659,25 @@
                 setIsLoading(true);
 
                 try {
-                    // 1. 檢查員編是否重複
                     const employeeIdExists = assignees.some(a => a.employeeId === formData.employeeId);
                     if (employeeIdExists) {
                         setIsLoading(false);
                         return showNotification(`員編 ${formData.employeeId} 已存在，請聯繫管理員。`, "error");
                     }
                     
-                    // 2. 更新當前用戶的 Firestore 文件
                     const userRef = db.collection(getPublicPath('users')).doc(userId);
                     
                     await userRef.set({
                         uid: userId,
                         name: formData.name,
-                        employeeId: formData.employeeId, // 員編作為登入的唯一識別碼
+                        employeeId: formData.employeeId,
                         department: formData.department,
-                        role: 'user', // 自主註冊的用戶預設為 'user'
+                        role: 'user', 
                         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                         lastLogin: firebase.firestore.FieldValue.serverTimestamp(),
                     });
 
-                    // 註冊成功後，useFirebase 鉤子的 onSnapshot 會自動偵測到 role 變為 'user' 並重新渲染 App
-                    showNotification(`註冊成功！歡迎 ${formData.name}。`, "success");
+                    showNotification(`註冊成功！歡迎 ${formData.name}。您現在可以進入儀表板。`, "success");
                     
                 } catch (e) {
                     console.error("Self-registration failed:", e);
@@ -713,7 +693,7 @@
                         <Icon name="UserCircle" size={48} className="text-primary-500 mx-auto mb-3" />
                         <h2 className="text-2xl font-bold text-gray-800">用戶自主註冊</h2>
                         <p className="text-sm text-gray-500 mt-1">請填寫您的企業資料以開始使用儀表板。</p>
-                        <p className="text-xs text-gray-400 mt-1">您的暫時 ID: {userId.substring(0, 8)}...</p>
+                        <p className="text-xs text-gray-400 mt-1">您的暫時 ID: {userId ? userId.substring(0, 8) + '...' : 'N/A'}</p>
                     </div>
 
                     <form onSubmit={handleSubmit} className="space-y-4">
@@ -732,7 +712,7 @@
                             className={`w-full px-4 py-3 text-white font-semibold rounded-lg shadow-md transition-colors flex items-center justify-center ${isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-primary-500 hover:bg-primary-600'}`}>
                             {isLoading ? (
                                 <>
-                                    <Icon name="Loader" size={20} className="animate-spin mr-2" />
+                                    <Icon name="Loader" size={20} className="mr-2" />
                                     <span>正在註冊...</span>
                                 </>
                             ) : (
@@ -753,15 +733,16 @@
             const { 
                 db, 
                 userId, 
-                userRole, // 實時衍生
-                userDept, // 實時衍生
-                canManage, // 實時衍生
+                userRole, 
+                userDept, 
+                canManage, 
                 isAuthReady, 
                 projects, 
                 assignees, 
                 logs, 
                 logAction,
-                getPublicPath 
+                getPublicPath,
+                isFirebaseConfigValid
             } = useFirebase();
             
             const [notification, setNotification] = useState(null);
@@ -773,21 +754,17 @@
                 setNotification({ message, type });
             }, []);
 
-            // 處理專案新增/編輯的提交
             const handleProjectSubmit = async (formData) => {
                 if (!db || !userId) return showNotification("應用程式未準備好，請稍候。", "error");
 
                 try {
-                    // 使用 compat API 的 collection 和 doc
                     const projectsCollection = db.collection(getPublicPath('projects'));
                     
                     if (editingProject) {
-                        // 編輯現有專案
                         await projectsCollection.doc(editingProject.id).update(formData);
                         logAction(`更新了專案: ${formData.name}`, editingProject.id);
                         showNotification("專案更新成功！", "success");
                     } else {
-                        // 新增專案
                         const newDoc = await projectsCollection.add({
                             ...formData,
                             createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -805,49 +782,40 @@
                 }
             };
             
-            // 點擊編輯
             const handleEditProject = (project) => {
                 setEditingProject({ 
                     ...project, 
-                    // 確保日期格式為 YYYY-MM-DD
                     dueDate: project.dueDate.substring(0, 10) 
                 });
                 setIsProjectModalOpen(true);
             };
 
             const handleOpenAdd = () => {
+                if (!isFirebaseConfigValid) {
+                    return showNotification("資料庫未連接，無法新增專案。", "error");
+                }
                 setEditingProject(null);
                 setIsProjectModalOpen(true);
             }
 
 
-            // 身份檢查
             if (!isAuthReady) {
-                return <LoadingSpinner message="正在初始化 Firebase 與身份驗證..." />;
+                // Simplified Loading Spinner call
+                return <LoadingSpinner />;
             }
             
-            // 如果 isAuthReady 為 true 但沒有 userId，這意味著匿名/Token 登入可能失敗
             if (!userId) {
                  return (
                     <div className="p-8 max-w-4xl mx-auto text-center">
                         <h1 className="text-3xl font-bold text-red-600 mb-4">無法識別用戶身份</h1>
                         <p className="text-gray-600">
-                            應用程式無法完成 Firebase 認證。這通常是 **`firebaseConfig`** 或 **`__initial_auth_token`** 設置不匹配所致。
+                            應用程式無法完成 Firebase 認證。請檢查您的配置。
                         </p>
-                        <p className="text-sm text-gray-500 mt-2 font-semibold text-red-700">
-                            **請打開瀏覽器開發者工具（Console 標籤）查看詳細的 Firebase 認證失敗錯誤訊息，並聯繫您的應用程式提供者檢查 Token 簽名。**
-                        </p>
-                        <button 
-                            onClick={() => window.location.reload()}
-                            className="mt-6 px-6 py-3 bg-primary-500 text-white font-semibold rounded-lg shadow-md hover:bg-primary-600 transition-colors"
-                        >
-                            重新載入應用程式
-                        </button>
                     </div>
                 );
             }
             
-            // 新增：如果用戶角色是 guest，則強制顯示自主註冊表單
+            // 強制顯示自主註冊表單
             if (userRole === 'guest') {
                 return (
                     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
@@ -870,7 +838,6 @@
             }
 
 
-            // 根據專案狀態分組
             const groupedProjects = projects.reduce((acc, project) => {
                 acc[project.status] = acc[project.status] || [];
                 acc[project.status].push(project);
@@ -881,7 +848,6 @@
 
             return (
                 <div className="p-4 md:p-8">
-                    {/* 通知組件 */}
                     {notification && (
                         <Notification 
                             message={notification.message} 
@@ -900,7 +866,7 @@
                                 </span>
                             </h1>
                             <div className="flex items-center space-x-3">
-                                <span className="text-xs text-gray-500 mr-4">v{APP_VERSION}</span> {/* 顯示版本號 */}
+                                <span className="text-xs text-gray-500 mr-4">v{APP_VERSION}</span> 
                                 {canManage && (
                                     <button 
                                         onClick={() => setAdminManagementModalOpen(true)}
@@ -925,9 +891,7 @@
                                     <h3 className="text-lg font-bold mb-4 flex items-center text-gray-700">
                                         <StatusBadge status={status} />
                                         <span className="ml-2">
-                                            {statusOrder.indexOf(status) === 0 ? '待處理' : 
-                                             statusOrder.indexOf(status) === 1 ? '進行中' : 
-                                             statusOrder.indexOf(status) === 2 ? '已完成' : '暫停'}
+                                            {status === 'Pending' ? '待處理' : status === 'InProgress' ? '進行中' : status === 'Completed' ? '已完成' : '暫停'}
                                         </span>
                                         <span className="ml-2 text-sm font-medium text-gray-400">({groupedProjects[status]?.length || 0})</span>
                                     </h3>
@@ -960,7 +924,7 @@
                                 assignees={assignees}
                                 onSubmit={handleProjectSubmit}
                                 onClose={() => setIsProjectModalOpen(false)}
-                                canManage={canManage} // 傳遞管理權限
+                                canManage={canManage}
                             />
                         </Modal>
                         
