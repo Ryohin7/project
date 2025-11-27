@@ -98,12 +98,12 @@
             auth: null,
             userId: null,
             isAdminGlobal: false,
-            isAuthReady: false,
+            isAuthReady: false, // <-- 關鍵: 必須為 true 才能渲染主內容
             projects: [],
             assignees: [],
             currentTime: '',
-            targetVersion: '1.0.0', // 預設版本
-            currentVersion: '1.0.1', // 版本修正為 1.0.1
+            targetVersion: '1.0.0', 
+            currentVersion: '1.0.1', 
             isDbConnected: true,
             isAssigneesSeeded: false,
             notificationModal: { isOpen: false, title: '', message: '', isEmail: false, emailContent: null },
@@ -111,10 +111,11 @@
         };
 
         // 常數
-        const ADMIN_IDS = ['15152491164772220861']; // 請替換為您的管理員 UID
-        const PROJECTS_PATH = 'artifacts/' + (typeof __app_id !== 'undefined' ? __app_id : 'default-app-id') + '/public/data/projects';
-        const ASSIGNEES_PATH = 'artifacts/' + (typeof __app_id !== 'undefined' ? __app_id : 'default-app-id') + '/public/data/assignees';
-        const CONFIG_PATH = 'artifacts/' + (typeof __app_id !== 'undefined' ? __app_id : 'default-app-id') + '/public/data/config';
+        const ADMIN_IDS = ['15152491164772220861']; 
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const PROJECTS_PATH = `artifacts/${appId}/public/data/projects`;
+        const ASSIGNEES_PATH = `artifacts/${appId}/public/data/assignees`;
+        const CONFIG_PATH = `artifacts/${appId}/public/data/config`;
         const CONFIG_DOC_ID = 'app_config';
         
         let isListenersSetup = false; // 確保監聽器只設置一次
@@ -176,6 +177,20 @@ ${name} 您好，
         // ----------------------------------------------------------------------
         // 3. FIREBASE AUTH AND DATA LISTENERS
         // ----------------------------------------------------------------------
+        
+        /**
+         * 強制等待首次身份驗證狀態回覆
+         * @param {import("https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js").Auth} auth 
+         */
+        function awaitInitialAuth(auth) {
+            return new Promise((resolve) => {
+                const unsubscribe = onAuthStateChanged(auth, (user) => {
+                    // 第一次狀態變更後立即取消監聽，並解析 Promise
+                    unsubscribe(); 
+                    resolve(user);
+                });
+            });
+        }
 
         async function initFirebase() {
             try {
@@ -197,30 +212,45 @@ ${name} 您好，
                         console.log("已使用匿名方式登入 (備用)。");
                     }
                 } catch(e) {
-                    console.error("身份驗證失敗，將嘗試匿名登入:", e);
-                    await signInAnonymously(auth); // 確保在 token 失敗時仍能有使用者
+                    console.error("身份驗證或登入失敗，將嘗試使用 onAuthStateChanged 獲取狀態:", e);
+                    // 登入失敗不應該阻止我們獲取當前狀態
                 }
 
-                // 設置身份驗證狀態變更監聽器
-                onAuthStateChanged(auth, (user) => {
-                    if (user) {
-                        const isAdminGlobal = ADMIN_IDS.includes(user.uid);
-                        setState({ 
-                            userId: user.uid, 
-                            isAuthReady: true,
-                            isAdminGlobal: isAdminGlobal,
-                        });
-                        console.log("使用者 ID:", user.uid, "管理員:", isAdminGlobal);
+                // ** 關鍵修正: 等待首次身份驗證狀態回覆 **
+                const user = await awaitInitialAuth(auth);
+                
+                const isAdminGlobal = user ? ADMIN_IDS.includes(user.uid) : false;
+                setState({ 
+                    userId: user ? user.uid : null, 
+                    isAuthReady: true, // <-- 確保在這裡設定為 true
+                    isAdminGlobal: isAdminGlobal,
+                });
+                console.log("使用者 ID:", user ? user.uid : 'N/A', "管理員:", isAdminGlobal);
 
-                        // ** 關鍵修正：在 userId 確定後啟動監聽器 **
-                        if (!isListenersSetup) {
+                // 啟動資料監聽器 (確保只啟動一次)
+                if (user && !isListenersSetup) {
+                    setupDataListeners();
+                    isListenersSetup = true;
+                }
+
+                // 設置持續的身份驗證狀態變更監聽器（非啟動時序關鍵）
+                // 由於我們在 awaitInitialAuth 中已經獲取了初始狀態，這裡只需確保後續變更被處理
+                onAuthStateChanged(auth, (user) => {
+                    const currentUserId = user ? user.uid : null;
+                    if (currentUserId !== state.userId) {
+                         setState({ 
+                            userId: currentUserId, 
+                            isAdminGlobal: currentUserId ? ADMIN_IDS.includes(currentUserId) : false 
+                         });
+                         // 重新啟動監聽器如果 user 發生變化 (例如登出/入)
+                         if (user && !isListenersSetup) {
                             setupDataListeners();
                             isListenersSetup = true;
-                        }
-
-                    } else {
-                        setState({ userId: null, isAuthReady: true, isAdminGlobal: false });
-                        console.log("使用者已登出/未驗證。");
+                         } else if (!user) {
+                            // 登出時可以清理資料
+                            setState({ projects: [], assignees: [] });
+                            isListenersSetup = false;
+                         }
                     }
                 });
 
@@ -229,7 +259,8 @@ ${name} 您好，
                     setState({ currentTime: getFormattedDate() });
                 }, 1000);
             } catch (error) {
-                console.error("Firebase 初始化失敗: ", error);
+                console.error("Firebase 初始化失敗 (可能是配置錯誤): ", error);
+                // 確保無論如何都會結束初始化等待
                 setState({ isDbConnected: false, isAuthReady: true });
             }
         }
@@ -238,6 +269,7 @@ ${name} 您好，
         function setupDataListeners() {
             if (!state.db || !state.userId) {
                 console.error("無法設置資料監聽器：DB 或 User ID 缺失。");
+                // 如果是未驗證的匿名用戶，且安全規則要求 auth != null，這裡可能會因為沒有 uid 而失敗
                 return;
             }
             
@@ -828,11 +860,13 @@ ${name} 您好，
         }
         
         function renderProjectList() {
-            if (!state.userId) {
+            if (!state.userId && state.isAuthReady) {
+                // 如果身份驗證已完成 (isAuthReady=true)，但沒有 user ID，表示使用者是未登入狀態，且無法讀取公共資料。
                 return `
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4">所有專案 (資料無法載入)</h2>
                     <div class="bg-white rounded-xl shadow-lg p-6 text-center text-red-500 border border-red-200">
                         <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 inline-block mr-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                        <strong>錯誤：</strong> 系統正在等待使用者身份驗證完成。如果此訊息持續顯示，請檢查瀏覽器控制台是否有 Firebase 錯誤。
+                        <strong>資料讀取錯誤：</strong> 身份驗證已完成，但無法讀取資料。這很可能是由於 **Firestore 安全規則** 拒絕了當前的使用者 ID (${state.userId || 'N/A'}) 訪問公共資料。
                     </div>
                 `;
             }
@@ -921,9 +955,14 @@ ${name} 您好，
         function renderApp() {
             const appDiv = document.getElementById('app');
             if (!state.isAuthReady) {
+                // 如果 isAuthReady 仍為 false，顯示載入/等待畫面
                 appDiv.innerHTML = `
                     <div class="text-center p-12 text-lg text-indigo-600">
-                        啟動中... 正在連接 Firebase 服務並驗證身份...
+                        <svg class="animate-spin h-8 w-8 text-indigo-600 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <strong>正在連接 Firebase:</strong> 正在等待使用者身份驗證流程完成...
                     </div>
                 `;
                 return;
