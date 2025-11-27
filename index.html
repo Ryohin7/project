@@ -35,8 +35,8 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@0.292.0/dist/umd/lucide.js"></script>
+    <!-- Lucide Icons (修正: 使用較新的 UMD 版本，並透過 JS 函式呼叫來生成 SVG) -->
+    <script src="https://unpkg.com/lucide@0.303.0"></script>
 </head>
 <body class="bg-gray-50 min-h-screen">
     <div id="root"></div>
@@ -45,9 +45,12 @@
         // -------------------------------------------------------------------
         // 1. 環境變數設定與版本號
         // -------------------------------------------------------------------
-        const APP_VERSION = '1.1.0'; // 新增應用程式版本號
+        const APP_VERSION = '1.1.2'; // 版本號更新
         
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        // 使用者提供的 Firebase Config (從環境變數載入)
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        
+        // 確保應用程式 ID 和初始認證 Token 仍能獲取
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
         
@@ -63,19 +66,23 @@
         // 2. 共用組件 (Shared Components)
         // ---------------------------------------------------
 
-        // Lucide Icon Component Helper 
         const Icon = ({ name, size = 20, className = "" }) => {
             const [svgHtml, setSvgHtml] = useState(null);
 
             useEffect(() => {
-                if (typeof lucide !== 'undefined' && lucide.icons && lucide.icons[name]) {
+                if (typeof lucide !== 'undefined' && lucide[name]) {
                     try {
-                        // 使用 toSvg 方法從 lucide 全局物件取得 SVG 字串
-                        const iconSvg = lucide.icons[name].toSvg({ class: className, width: size, height: size });
-                        setSvgHtml(iconSvg);
+                        const iconFunc = lucide[name];
+                        if (iconFunc) {
+                            const svgString = iconFunc({ class: className, width: size, height: size }).toString();
+                            setSvgHtml(svgString);
+                        } else {
+                            // Fallback for older versions if needed
+                            const iconSvg = lucide.icons[name].toSvg({ class: className, width: size, height: size });
+                            setSvgHtml(iconSvg);
+                        }
                     } catch (error) {
-                        // 如果 toSvg 失敗，可能是 API 版本問題，此時應檢查 console
-                        console.error(`Error generating SVG for icon ${name} (lucide version issue?):`, error);
+                        console.error(`Error generating SVG for icon ${name}:`, error);
                         setSvgHtml(null); 
                     }
                 }
@@ -151,8 +158,8 @@
             const [db, setDb] = useState(null);
             const [auth, setAuth] = useState(null);
             const [userId, setUserId] = useState(null);
-            const [userRole, setUserRole] = useState('guest'); // guest, user, admin
-            const [userDept, setUserDept] = useState('未註冊'); // 預設值調整為 '未註冊'
+            // 新增狀態: 存放當前用戶的資料
+            const [currentUserData, setCurrentUserData] = useState(null);
             const [isAuthReady, setIsAuthReady] = useState(false);
             const [projects, setProjects] = useState([]);
             const [assignees, setAssignees] = useState([]); // All users in the system
@@ -162,7 +169,9 @@
                 `artifacts/${appId}/public/data/${collectionName}`, [appId]);
 
             const logAction = useCallback(async (action, projectId = null) => {
-                if (!db || !userId || userRole === 'guest') return; // 訪客不記錄日誌
+                // 修正：從 currentUserData 衍生 userRole
+                const role = currentUserData?.role || 'guest';
+                if (!db || !userId || role === 'guest') return; 
                 try {
                     // 使用 compat API 的 collection 和 add 方法
                     await db.collection(getPublicPath('systemLogs')).add({
@@ -171,24 +180,31 @@
                         userName: assignees.find(u => u.uid === userId)?.name || 'Unknown User',
                         action: action,
                         projectId: projectId,
-                        role: userRole
+                        role: role
                     });
                 } catch (e) {
                     console.error("Failed to log action:", e);
                 }
-            }, [db, userId, userRole, assignees, getPublicPath]);
+            }, [db, userId, currentUserData, assignees, getPublicPath]);
             
             useEffect(() => {
+                if (!firebaseConfig || !firebaseConfig.apiKey) {
+                    console.error("Firebase Configuration Missing or Invalid. Please ensure __firebase_config is correctly provided.");
+                    setIsAuthReady(true);
+                    return;
+                }
+                
                 let unsubscribeAuth = () => {};
                 let unsubscribeUsers = () => {};
                 let unsubscribeProjects = () => {};
                 let unsubscribeLogs = () => {};
+                let unsubscribeCurrentUser = () => {}; // 為了清理當前用戶的監聽器
+
                 
                 const initFirebase = async () => {
                     try {
                         console.log("1. Starting Firebase initialization...");
                         
-                        // 使用 compat API 進行初始化
                         const app = firebase.initializeApp(firebaseConfig);
                         const authInstance = app.auth();
                         const dbInstance = app.firestore();
@@ -197,16 +213,21 @@
                         setDb(dbInstance);
 
                         // --- 認證流程 ---
-                        console.log(`2. Attempting sign-in. Token exists: ${!!initialAuthToken}`);
-
-                        if (authInstance.currentUser) {
-                            console.log("User already signed in:", authInstance.currentUser.uid);
-                        } else if (initialAuthToken) {
-                            await authInstance.signInWithCustomToken(initialAuthToken);
-                        } else {
-                            // 即使是匿名登入，也會生成一個 uid
-                            await authInstance.signInAnonymously();
+                        try {
+                            if (authInstance.currentUser) {
+                                console.log("User already signed in:", authInstance.currentUser.uid);
+                            } else if (initialAuthToken) {
+                                console.log("Attempting sign-in with Custom Token...");
+                                await authInstance.signInWithCustomToken(initialAuthToken);
+                            } else {
+                                console.log("Attempting anonymous sign-in...");
+                                await authInstance.signInAnonymously();
+                            }
+                        } catch (signError) {
+                            console.error("Firebase 認證失敗 (Auth Sign-in Failed) - 詳細錯誤:", signError.code, signError.message);
+                            console.error("請檢查您的 firebaseConfig 是否正確，並確認 Firebase Auth 服務已啟用。");
                         }
+
 
                         // --- 狀態變更監聽器 ---
                         unsubscribeAuth = authInstance.onAuthStateChanged(async (user) => {
@@ -215,42 +236,7 @@
                                 setUserId(currentUserId);
                                 console.log("3. Auth state changed. User ID:", currentUserId);
 
-                                // 4. 檢查使用者資料 (Public Collection)
-                                let role = 'guest';
-                                let department = '未註冊';
-                                try {
-                                    const userRef = dbInstance.collection(getPublicPath('users')).doc(currentUserId);
-                                    
-                                    const userDoc = await userRef.get();
-                                    
-                                    if (userDoc.exists) {
-                                        // 用戶已註冊
-                                        const userData = userDoc.data();
-                                        role = userData.role || 'user';
-                                        department = userData.department || '未設定';
-
-                                        // 更新登入時間
-                                        await userRef.update({ 
-                                            lastLogin: firebase.firestore.FieldValue.serverTimestamp()
-                                        });
-                                        console.log(`4. User data loaded. Role: ${role}, Dept: ${department}`);
-                                    } else {
-                                        // 首次登入或未註冊：保持 role 為 guest，強制進入註冊流程
-                                        role = 'guest';
-                                        department = '未註冊';
-                                        console.log("4. User document NOT found. Setting role to 'guest' for self-registration.");
-                                    }
-                                    
-                                    setUserRole(role);
-                                    setUserDept(department); // 設定部門狀態
-                                    
-                                } catch (e) {
-                                    console.error("CRITICAL ERROR: Failed to check user data in Firestore. Check Security Rules:", e);
-                                    setUserRole('guest'); 
-                                    setUserDept('錯誤'); 
-                                }
-
-                                // 5. 設定 Firestore 即時監聽器 (只有在 auth 成功後才設定)
+                                // 4. 監聽 Firestore 公開資料 (Users, Projects, Logs)
                                 
                                 // 監聽所有使用者 (Assignees)
                                 unsubscribeUsers = dbInstance.collection(getPublicPath('users')).onSnapshot(snapshot => {
@@ -287,23 +273,31 @@
                                         console.error("Error fetching logs:", error);
                                     });
 
-                                // 註冊線上狀態 (Heartbeat) - 簡化
-                                try {
-                                    const onlineRef = dbInstance.collection(getPublicPath('onlineUsers')).doc(currentUserId);
-                                    await onlineRef.set({ uid: currentUserId, lastActive: firebase.firestore.FieldValue.serverTimestamp() });
-                                } catch (e) {
-                                     console.error("Failed to set online status:", e);
-                                }
-
-
+                                // 5. 設定當前用戶文件監聽器 (解決註冊後無法切換的問題)
+                                const userDocRef = dbInstance.collection(getPublicPath('users')).doc(currentUserId);
+                                unsubscribeCurrentUser = userDocRef.onSnapshot(doc => {
+                                    if (doc.exists) {
+                                        const userData = doc.data();
+                                        setCurrentUserData(userData);
+                                        // 同時更新登入時間
+                                        userDocRef.update({ 
+                                            lastLogin: firebase.firestore.FieldValue.serverTimestamp()
+                                        }).catch(e => console.error("Failed to update last login:", e));
+                                    } else {
+                                        setCurrentUserData(null); // 檔案不存在，視為 'guest'
+                                    }
+                                }, error => {
+                                    console.error("Error fetching current user document:", error);
+                                    setCurrentUserData(null);
+                                });
+                                
                                 setIsAuthReady(true);
                                 console.log("6. Firebase initialization complete.");
 
                             } else {
                                 console.log("User signed out or failed to authenticate.");
                                 setUserId(null);
-                                setUserRole('guest');
-                                setUserDept('未註冊');
+                                setCurrentUserData(null);
                                 setIsAuthReady(true); 
                             }
                         });
@@ -322,18 +316,22 @@
                     unsubscribeUsers();
                     unsubscribeProjects();
                     unsubscribeLogs();
+                    unsubscribeCurrentUser(); // 新增清理
                 };
-            }, [appId, initialAuthToken, getPublicPath]);
+            }, [appId, initialAuthToken, getPublicPath]); 
 
+            // 實時從 currentUserData 衍生狀態 (修正無法切換的問題)
+            const userRole = currentUserData?.role || 'guest';
+            const userDept = currentUserData?.department || '未註冊';
             const canManage = userRole === 'admin';
 
             return {
                 db,
                 auth,
                 userId,
-                userRole,
-                userDept,
-                canManage,
+                userRole, // 衍生值
+                userDept, // 衍生值
+                canManage, // 衍生值
                 isAuthReady,
                 projects,
                 assignees,
@@ -533,10 +531,8 @@
                     logAction(`[Admin] 預先註冊了新用戶: ${formData.name} (${formData.employeeId})`, newUid);
                     showNotification(`用戶 ${formData.name} (角色: ${roleToAssign}) 註冊成功！`, "success");
                     
-                    // 重設表單並關閉
+                    // 重設表單
                     setFormData({ name: '', employeeId: '', department: '企劃' });
-                    // 不關閉 Modal 讓管理員可以連續新增
-                    // onClose(); 
                     
                 } catch (e) {
                     console.error("User registration failed:", e);
@@ -700,7 +696,7 @@
                         lastLogin: firebase.firestore.FieldValue.serverTimestamp(),
                     });
 
-                    // 註冊成功後，useFirebase 鉤子會自動偵測到 role 變為 'user' 並重新渲染 App
+                    // 註冊成功後，useFirebase 鉤子的 onSnapshot 會自動偵測到 role 變為 'user' 並重新渲染 App
                     showNotification(`註冊成功！歡迎 ${formData.name}。`, "success");
                     
                 } catch (e) {
@@ -757,9 +753,9 @@
             const { 
                 db, 
                 userId, 
-                userRole, 
-                userDept,
-                canManage, 
+                userRole, // 實時衍生
+                userDept, // 實時衍生
+                canManage, // 實時衍生
                 isAuthReady, 
                 projects, 
                 assignees, 
@@ -836,9 +832,11 @@
                     <div className="p-8 max-w-4xl mx-auto text-center">
                         <h1 className="text-3xl font-bold text-red-600 mb-4">無法識別用戶身份</h1>
                         <p className="text-gray-600">
-                            應用程式無法完成 Firebase 認證。這可能表示您的環境設定有問題，或者 Firebase 服務暫時無法連接。
+                            應用程式無法完成 Firebase 認證。這通常是 **`firebaseConfig`** 或 **`__initial_auth_token`** 設置不匹配所致。
                         </p>
-                        <p className="text-sm text-gray-500 mt-2">請檢查控制台是否有詳細的 Firebase 錯誤訊息。</p>
+                        <p className="text-sm text-gray-500 mt-2 font-semibold text-red-700">
+                            **請打開瀏覽器開發者工具（Console 標籤）查看詳細的 Firebase 認證失敗錯誤訊息，並聯繫您的應用程式提供者檢查 Token 簽名。**
+                        </p>
                         <button 
                             onClick={() => window.location.reload()}
                             className="mt-6 px-6 py-3 bg-primary-500 text-white font-semibold rounded-lg shadow-md hover:bg-primary-600 transition-colors"
